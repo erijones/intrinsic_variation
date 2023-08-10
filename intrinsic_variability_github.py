@@ -90,6 +90,10 @@ class SimulateSBP():
 
         return ts, trajs
 
+##############################
+# RAW DATA INPUT/CLEANING
+##############################
+
 def load_exp_data_e_coli(load_data=True, verbose=False, if_plot=False,
                          return_raw_data=False):
     """Loads the raw data for the E. coli experimental system.
@@ -158,7 +162,7 @@ def load_exp_data_e_coli(load_data=True, verbose=False, if_plot=False,
     exp_gcs = {}
 
     # omit experient 0 on 5/3/22 (trial run)
-    # omit experiment 2 on 5/25/22 (faulty spot plating measurements)
+    # omit experiment 2 on 5/25/22 (no spot plating measurements)
     for dataset in all_exps[1:]:
     #for dataset in [1]:
         if verbose: print()
@@ -195,80 +199,6 @@ def load_exp_data_e_coli(load_data=True, verbose=False, if_plot=False,
         pickle.dump(exp_gcs, f)
 
     return exp_gcs
-
-# from Ian Hincks, https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib
-def lighten_color(color, amount=0.5):
-    """
-    Lightens the given color by multiplying (1-luminosity) by the given amount.
-    Input can be matplotlib color string, hex string, or RGB tuple.
-    
-    Examples:
-    >> lighten_color('g', 0.3)
-    >> lighten_color('#F034A3', 0.6)
-    >> lighten_color((.3,.55,.1), 0.5)
-    """
-    import matplotlib.colors as mc
-    import colorsys
-    try:
-        c = mc.cnames[color]
-    except:
-        c = color
-    c = np.array(colorsys.rgb_to_hls(*mc.to_rgb(c)))
-    return colorsys.hls_to_rgb(c[0],1-amount * (1-c[1]),c[2])
-
-def plot_growth_trajectories(gc, date=None, plotted_inocula=None, ax=None,
-                             fontsize=22, time_units='min', plot_std=False):
-    inocula = sorted([elem for elem in set(gc.columns) if (type(elem) != str and
-                                                          elem > 0)])
-    cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    #cycle = plt.cm.nipy_spectral(np.linspace(0,1,len(inocula)+1))[::-1]
-    #cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
-    if not ax:
-        fig, ax = plt.subplots()
-    for i,inoculum in enumerate(inocula):
-        if plotted_inocula:
-            if inoculum not in plotted_inocula:
-                continue
-        num_replicates = len(gc[inoculum].columns)
-        if time_units == 'hr':
-            xs = [elem/60 for elem in gc['Time']]
-        else:
-            xs = [elem for elem in gc['Time']]
-        for j,replicate in enumerate(range(num_replicates)):
-            ys = gc[inoculum].iloc[:,replicate]
-            ax.plot(xs, ys, lw=0.3, color=cycle[i], zorder=4)
-        ax.plot([0, 0], [0, 0], color=cycle[i], lw=1, label=r'{} ({})'
-                .format(inoculum, num_replicates), zorder=10)
-
-        if plot_std:
-            inoculum_average = gc[inoculum].mean(axis=1)
-            inoculum_std = gc[inoculum].std(axis=1)
-            ax.fill_between(xs,
-                    [a - b for a,b, in zip(inoculum_average, inoculum_std)],
-                    [a + b for a,b, in zip(inoculum_average, inoculum_std)],
-                    color=lighten_color(cycle[i], amount=0.3), alpha=1, zorder=1)
-
-
-    if time_units == 'hr':
-        ax.set_xlabel('time [hr]', fontsize=fontsize)
-        ax.axis([0, max(gc['Time'])/60, 0.005, 1.2])
-    else:
-        ax.set_xlabel('time [min]', fontsize=fontsize)
-        ax.axis([0, max(gc['Time']), 0.005, 1.2])
-    ax.set_ylabel('optical density', fontsize=fontsize)
-    ax.set_yscale('log')
-    ax.tick_params(axis='both', which='major', labelsize=fontsize)
-    legend = ax.legend(title=r'inoc. size (\# reps)',
-                       fontsize=fontsize-4)
-    legend.get_title().set_fontsize(str(fontsize-4))
-    if date:
-        print('ring')
-        ax.set_title('Experiment performed {}'.format(date), fontsize=fontsize)
-        plt.savefig('figs/plate_trajectories_no_background_{}.pdf'.format(date), bbox_inches='tight')
-
-    return ax
-
 
 def calculate_inocula_with_spot_plating(gc, spot_plate_filename, verbose=False):
     """Modifies inoculum sizes (columns of gc) to agree with the spot plate
@@ -332,7 +262,7 @@ def calculate_inocula_with_spot_plating(gc, spot_plate_filename, verbose=False):
 
 
 def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
-                      return_raw_data=False):
+                      return_raw_data=False, verbose=False):
     """Loads raw data files f1 and f2 and extracts growth curve data and
     inoculation data (via spot plate counting).
     Inputs: f1 ... str, filename corresponding to bacterial growth curves for
@@ -343,13 +273,16 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
             plate_num ... int, specifies 96-well plate on a given date
             if_plot ... boolean, specifies whether to plot growth curves of
                         each 96-well plate
+            return_raw_data ... boolean, if True returns raw data (i.e. without
+                                omitted growth trajectories, with background
+                                OD)
+            verbose ... bool, indicates whether to print diagnostic text
     Outputs: gc ... dict, contains abundance data across many replicates for an
                     inoculum size
     Usage: gc['Time'] = [0, ..., t_end]
            gc[inoculum] = [[0.001, ..., 0.989], [0.014, ..., 1.132], ...] """
 
-    #print(f1)
-    # gc = growth curve; plate = spot plate counts
+    # notation: gc = growth curve; plate = spot plate counts
     gc = pd.read_excel(f1)
     plate = pd.read_excel(f2, index_col=0)
     order = ['Time', 'Temp'] # 'order' will become column names
@@ -373,24 +306,13 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
     gc.columns = fake_order
     num_measurements = len(gc['Time'])
 
+    # calculate time increment for OD measurements
     if type(gc['Time'][0]) == int or type(gc['Time'][0]) == np.int64:
         delta_t = gc['Time'][1] - gc['Time'][0]
     if type(gc['Time'][0]) == datetime.time:
         delta_t = int(str(gc['Time'][1])[3:5]) - int(str(gc['Time'][0])[3:5])
-
     gc['Time'] = [delta_t*t for t in range(num_measurements)]
-
     gc.columns = fake_order
-
-    inocula = sorted([elem for elem in set(gc.columns) if type(elem) != str])
-
-    initial_ods = []
-    for inoculum in inocula:
-        initial_ods.append(gc[inoculum][30])
-
-    median_od = np.median(initial_ods)
-    std_od = np.std(initial_ods)
-
 
     if if_plot: fig, ax = plt.subplots()
 
@@ -411,9 +333,11 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
 
     # filter growth trajectories that are unnaturally high at an early time
     for inoculum in inocula:
+        # used to parameter sweep consequences of the cutoff value of 0.125:
         #if gc[inoculum][int(60/delta_t)] > 0.13:
         if gc[inoculum][int(60/delta_t)] > 0.125:
-            print('omitting elem, high initial OD:', gc[inoculum][int(60/delta_t)])
+            if verbose:
+                print('omitting elem, high initial OD:', gc[inoculum][int(60/delta_t)])
             if if_plot:
                 plt.plot(gc['Time'], gc[inoculum], color='r', lw=2, zorder=5)
             del gc[inoculum]
@@ -422,15 +346,11 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
             order.pop(fake_order_idx)
         else:
             if if_plot: plt.plot(gc['Time'], gc[inoculum], color='k', lw=1)
-            #if if_plot: plt.plot(gc['Time'], [0.025*np.exp(0.4*t/60) for t in
-            #                                  gc['Time']], color='red')
-            #if if_plot: plt.plot(gc['Time'], [0.025*np.exp(0.6*t/60) for t in
-            #                                  gc['Time']], color='red')
 
     # subtract background from growth trajectories
     inocula = sorted([elem for elem in set(gc.columns) if type(elem) != str])
     background_od = np.mean([gc[inoculum][0] for inoculum in inocula])
-    print('background OD:', background_od)
+    if verbose: print('background OD:', background_od)
     for inoculum in inocula:
         gc[inoculum] = gc[inoculum].apply(lambda x: x - background_od)
 
@@ -447,6 +367,10 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
 
     gc.columns = order
     return gc
+
+##############################
+# HELPER FUNCTIONS
+##############################
 
 def get_std_fpt(data_dict, threshold, verbose=False):
     """Calculates the standard deviation of the first passage time distribution
@@ -594,6 +518,105 @@ def get_sub_growth_rates(growth_rates, return_dist=False):
         return growth_rates_a, growth_rates_b, growth_rates_c
 
     return mu_a, mu_b, mu_c
+
+
+
+##############################
+# HELPER PLOTTING FUNCTIONS 
+##############################
+
+def lighten_color(color, amount=0.5):
+    """ From Ian Hincks, https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib
+    Lightens the given color by multiplying (1-luminosity) by the given amount.
+    Input can be matplotlib color string, hex string, or RGB tuple.
+    
+    Examples:
+    >> lighten_color('g', 0.3)
+    >> lighten_color('#F034A3', 0.6)
+    >> lighten_color((.3,.55,.1), 0.5)
+    """
+    import matplotlib.colors as mc
+    import colorsys
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = np.array(colorsys.rgb_to_hls(*mc.to_rgb(c)))
+    return colorsys.hls_to_rgb(c[0],1-amount * (1-c[1]),c[2])
+
+
+##############################
+# PLOTTING FUNCTIONS 
+##############################
+
+def plot_growth_trajectories(gc, date=None, plotted_inocula=None, ax=None,
+                             fontsize=22, time_units='min', plot_std=False,
+                             if_plot=False):
+    """Plot a subset of bacterial growth trajectories.
+    Inputs: gc ... pandas database, "(g)rowth (c)urves", contains growth
+                   trajectories with column names corresponding to inoculum
+                   sizes
+            date ... str, date on which experiments were performed
+            plotted_inocula ... list, which inocula from gc to plot
+            ax ... axes, canvas for the plot
+            fontsize ... float
+            time_units ... str, 'min' or 'hr', sets time units for plotting
+            plot_std ... bool, indicates whether to plot the standard deviation
+                         across replicates for each inoculum size
+            if_plot ... boolean, specifies whether to save standalone figure
+    Outputs: ax ... axes, canvas for the plot """
+
+    # all inocula provided in gc
+    inocula = sorted([elem for elem in set(gc.columns) if (type(elem) != str and
+                                                          elem > 0)])
+    cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    if not ax:
+        fig, ax = plt.subplots()
+    for i,inoculum in enumerate(inocula):
+        if plotted_inocula:
+            if inoculum not in plotted_inocula:
+                continue
+        num_replicates = len(gc[inoculum].columns)
+        if time_units == 'hr':
+            xs = [elem/60 for elem in gc['Time']]
+        else:
+            xs = [elem for elem in gc['Time']]
+        for j,replicate in enumerate(range(num_replicates)):
+            ys = gc[inoculum].iloc[:,replicate]
+            ax.plot(xs, ys, lw=0.3, color=cycle[i], zorder=4)
+        # phantom plot for legend:
+        ax.plot([0, 0], [0, 0], color=cycle[i], lw=1, label=r'{} ({})'
+                .format(inoculum, num_replicates), zorder=10)
+        if plot_std:
+            inoculum_average = gc[inoculum].mean(axis=1)
+            inoculum_std = gc[inoculum].std(axis=1)
+            ax.fill_between(xs,
+                    [a - b for a,b, in zip(inoculum_average, inoculum_std)],
+                    [a + b for a,b, in zip(inoculum_average, inoculum_std)],
+                    color=lighten_color(cycle[i], amount=0.3), alpha=1, zorder=1)
+
+    if time_units == 'hr':
+        ax.set_xlabel('time [hr]', fontsize=fontsize)
+        ax.axis([0, max(gc['Time'])/60, 0.005, 1.2])
+    else:
+        ax.set_xlabel('time [min]', fontsize=fontsize)
+        ax.axis([0, max(gc['Time']), 0.005, 1.2])
+    ax.set_ylabel('optical density', fontsize=fontsize)
+    ax.set_yscale('log')
+    ax.tick_params(axis='both', which='major', labelsize=fontsize)
+    legend = ax.legend(title=r'inoc. size (\# reps)',
+                       fontsize=fontsize-4)
+    legend.get_title().set_fontsize(str(fontsize-4))
+    if date:
+        ax.set_title('Experiment performed {}'.format(date), fontsize=fontsize)
+    if if_plot:
+        if date:
+            plt.savefig('figs/plate_trajectories_no_background_{}.pdf'.format(date), bbox_inches='tight')
+        else:
+            plt.savefig('figs/plate_trajectories_no_background.pdf', bbox_inches='tight')
+
+    return ax
 
 def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     """Plot the standard deviation of the first passage time distribution,
@@ -746,10 +769,7 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     ax_inset.set_xticks([1, 100])
     ax_inset.tick_params(axis='both', which='major', labelsize=12)
 
-    plt.savefig('figs/Fig3.pdf', bbox_inches='tight')
-
-
-
+    plt.savefig('figs/Fig4.pdf', bbox_inches='tight')
     return
 
 def plot_each_std_fpt(fpts, growth_rates, verbose=False, if_plot=True):
@@ -840,8 +860,6 @@ def plot_each_std_fpt(fpts, growth_rates, verbose=False, if_plot=True):
 
             plt.savefig('figs/std_fpt_vs_inoculum_exp_{}.pdf'.format(exp), bbox_inches='tight')
 
-
-
 def plot_distribution_of_initial_ODs():
     # to use this function, make sure that get_growth_curves returns the growth
     # curves
@@ -884,14 +902,9 @@ def plot_distribution_of_initial_ODs():
         plt.savefig('figs/initial_OD_t_{}.pdf'.format(t), bbox_inches='tight')
 
 
-
-##############################
-# HELPER PLOTTING FUNCTIONS 
-##############################
-
-##############################
-# PLOTTING SCRIPTS
-##############################
+############################################################
+# SCRIPTS FOR GENERATING MAIN TEXT FIGURES
+############################################################
 
 def generate_fig_1():
     """Generates Figure 1 of the main text. 100 representative growth
@@ -987,16 +1000,16 @@ def generate_fig_1():
     ax_right.axhline(y=1e6, color='red', lw=1.5)
     ax_right.text(1, 2.5e5, 'spoiled milk', color='red', fontsize=14)
 
-    plt.savefig('figs/Fig_1_prefinal.pdf', bbox_inches='tight')
+    plt.savefig('figs/Fig1.pdf', bbox_inches='tight')
 
-def generate_fig_2():
+def generate_fig_3():
     """Generates Figure 2 of the main text. Plots
     replicate growth trajectories for E. coli (panel a), S. aureus (b),
     duckweed (c), along with the temporal variation as a function of
     threshold (panel d). """
 
     threshold = 0.03
-    exp_data_dict = load_exp_data_e_coli(load_data=False, if_plot=False)
+    exp_data_dict = load_exp_data_e_coli(load_data=True, if_plot=False)
 
     fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(ncols=2, nrows=2, figsize=(6, 4.8))
 
@@ -1016,7 +1029,7 @@ def generate_fig_2():
         #print(exp, inocula)
         ax = plot_growth_trajectories(gc, plotted_inocula=inocs, ax=ax,
                                       fontsize=12, time_units='hr',
-                                      plot_std=False)
+                                      plot_std=False, if_plot=False)
         ax.axis([0, 18, 0.01, 1.2])
         legend = ax.legend(title=title, fontsize=6, loc='upper left')
         legend.get_title().set_fontsize('6')
@@ -1090,7 +1103,7 @@ def generate_fig_2():
 
 
     plt.tight_layout(w_pad=0, h_pad=0)
-    plt.savefig('figs/Fig2_new.pdf', bbox_inches='tight')
+    plt.savefig('figs/Fig3.pdf', bbox_inches='tight')
 
 
     #fpts = get_std_fpt(exp_data_dict, threshold=threshold)
@@ -1099,7 +1112,7 @@ def generate_fig_2():
 
     #e_coli_inocula, std_fpt_e_coli, e_coli_labels = get_experimental_temporal_variability('e_coli')
 
-def generate_fig_3():
+def generate_fig_4():
     """Empirically calculates the standard deviation of the first passage time
     distribution at a particular abundance threshold for three experimental
     systems.
@@ -1113,18 +1126,18 @@ def generate_fig_3():
                       Usage: std_fpt[exp][inoculum][replicate] = # """
     # E coli
     threshold = 0.03
-    exp_data_dict = load_exp_data_e_coli(load_data=False, if_plot=False)
+    exp_data_dict = load_exp_data_e_coli(load_data=True, if_plot=False)
 
     fpts = get_std_fpt(exp_data_dict, threshold=threshold)
 
     growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
                                     if_plot=False)
-    plot_each_std_fpt(fpts, growth_rates)
+    plot_each_std_fpt(fpts, growth_rates, if_plot=False)
     plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates)
 
     return 1,2,3
 
 if __name__ == "__main__":
     generate_fig_1()
-    generate_fig_2()
     generate_fig_3()
+    generate_fig_4()
