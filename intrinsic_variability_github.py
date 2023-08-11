@@ -94,9 +94,9 @@ class SimulateSBP():
 # RAW DATA INPUT/CLEANING
 ##############################
 
-def load_exp_data_e_coli(load_data=True, verbose=False, if_plot=False,
+def load_bacterial_growth_data(load_data=True, verbose=False, if_plot=False,
                          return_raw_data=False):
-    """Loads the raw data for the E. coli experimental system.
+    """Loads the raw data for the E. coli and S. aureus bacterial growth.
     Inputs: load_data ... bool, indicates whether to load cached data
             verbose ... bool, indicates whether to print diagnostic text
     Outputs: exp_data_dict ... dict containing information about growth
@@ -372,7 +372,7 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
 # HELPER FUNCTIONS
 ##############################
 
-def get_std_fpt(data_dict, threshold, verbose=False):
+def get_fpts(data_dict, threshold, verbose=False):
     """Calculates the standard deviation of the first passage time distribution
     at a threshold, for each set of replicate trajectories stored in data_dict.
     Inputs: data_dict ... dict, contains replicate trajectories
@@ -380,13 +380,9 @@ def get_std_fpt(data_dict, threshold, verbose=False):
             threshold ... float, abundance threshold of first passage time
                           distribution
             verbose ... bool, indicates whether to print diagnostic text
-    Outputs: inocula ... length N list, list of the inoculum sizes that were
-                         experimentally tested. N is the number of inoculum
-                         sizes.
-             std_fpt ... dict, contains standard deviation of the first passage
-                         time distributions for each inoculum size for each
-                         experiment
-                         Usage: std_fpt[exp][inoculum] = std of fpt dist """
+    Outputs: fpts ... dict, contains a list of first passage times for each
+                      inoculum size for each experiment
+                      Usage: fpts[exp][inoculum] = [fpt1, fpt2, ..., ]"""
 
     fpts = {}
     for exp in data_dict:
@@ -406,7 +402,6 @@ def get_std_fpt(data_dict, threshold, verbose=False):
                     trajectory = gc[inoculum]
                 else:
                     trajectory = gc[inoculum].iloc[:, replicate]
-                #print(trajectory)
                 for i,measurement in enumerate(trajectory):
                     if i < 30: continue
                     if measurement > threshold:
@@ -422,7 +417,7 @@ def get_growth_rates(data_dict, threshold, verbose=False, if_plot=False):
             threshold ... float, abundance threshold of first passage time
                           distribution
             verbose ... bool, indicates whether to print diagnostic text
-            if_plot ... boolean, specifies whether to plot histograms of growth
+            if_plot ... bool, specifies whether to plot histograms of growth
                         rates for each inoculum size of each experiment
     Outputs: growth_rates ... dict (same structure as data_dict), contains
                               growth rates for each replicate of each inoculum
@@ -451,16 +446,13 @@ def get_growth_rates(data_dict, threshold, verbose=False, if_plot=False):
                 except StopIteration:
                     continue
 
+                # consider 7 data points to the left and right of the threshold
+                # for fitting the growth rate
                 subset_ys = np.log(rep_traj[threshold_idx-7:threshold_idx+7])
                 subset_xs = xs[threshold_idx-7:threshold_idx+7]
                 slope, intercept, r, p, std_err = stats.linregress(subset_xs,
                                                                    subset_ys)
-
-                #with warnings.catch_warnings():
-                #    # don't print RuntimeWarning for log of negative numbers
-                #    warnings.simplefilter('ignore')
-                #    delta_ys = np.diff(np.log(gc[inoculum].iloc[:,replicate][::skip]))/(skip*delta_x)
-                growth_rates[exp][inoculum].append(60*slope)
+                growth_rates[exp][inoculum].append(60*slope) # units of 1/hour
 
     for exp in growth_rates:
         for inoculum in growth_rates[exp]:
@@ -494,9 +486,25 @@ def get_growth_rates(data_dict, threshold, verbose=False, if_plot=False):
     return growth_rates
 
 def get_sub_growth_rates(growth_rates, return_dist=False):
+    """Calculates growth rates for E. coli at 37 C, E. coli at 25 C, and 
+    S.  aureus at 37 C.
+    Inputs: growth_rates ... dict (same structure as data_dict) (from
+                             get_growth_rates()), contains growth rates for
+                             each replicate of each inoculum of each
+                             experiment. 
+            return_dist ... bool, specifies whether to return the distribution
+                            of growth rates for each organism and growth
+                            condition
+    Outputs: mu_a ... float, growth rate for E. coli at 37 C
+             mu_b ... float, growth rate for E. coli at 25 C
+             mu_c ... float, growth rate for S. aureus at 37 C """
+
     growth_rates_a = []
     growth_rates_b = []
     growth_rates_c = []
+    # E. coli at 37C corresponds to experiments 1, 2, 3
+    # E. coli at 25C corresponds to experiment 4
+    # S. aureus at 37C corresponds to experiments 5, 6
     for exp in growth_rates:
         if exp in [1, 2, 3]:
             for inoc in growth_rates[exp]:
@@ -518,7 +526,6 @@ def get_sub_growth_rates(growth_rates, return_dist=False):
         return growth_rates_a, growth_rates_b, growth_rates_c
 
     return mu_a, mu_b, mu_c
-
 
 
 ##############################
@@ -623,7 +630,7 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     in units of division time, across all experiments.
     Inputs: fpts ... dict, contains the first passage time distributions for
                      each replicate of each inoculum size for each experiment
-                     Usage: std_fpt[exp][inoculum][replicate] = #
+                     Usage: fpts[exp][inoculum][replicate] = #
             growth_rates ... dict (same structure as data_dict), contains
                              growth rates for each replicate of each inoculum
                              of each experiment
@@ -633,16 +640,8 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     marker_list = ['s', '^', '^', '^', 'o', 'D', 'D', 'p']
     cycle = plt.cm.nipy_spectral(np.linspace(0,1,len(marker_list)+1))[::-1]
     cycle = [cycle[4], cycle[4], cycle[4],  cycle[4], cycle[4], cycle[4], cycle[6], cycle[6], cycle[6]]
-    marker_size = [10, 8, 10, 8, 8, 9, 7, 7]
     marker_size = [10, 9, 10, 9, 9, 7, 7]
     mfc = ['white','white','white','white','white', cycle[6], cycle[6]]
-    #labels = [r'bad {{\em E. coli}} growth (05-03-22)',
-    #          r'{{\em E. coli}} growth, 37\textdegree C (05-19-22)',
-    #          r'{{\em E. coli}} growth, 37\textdegree C (05-25-22)',
-    #          r'{{\em E. coli}} growth, 37\textdegree C (06-01-22)',
-    #          r'{{\em E. coli}} growth, 25\textdegree C (06-15-22)',
-    #          r'{{\em S. aureus}} growth, 37\textdegree C (06-27-22)',
-    #          r'{{\em S. aureus}} growth, 37\textdegree C (07-01-22)' ]
     labels = [r'bad {{\em E. coli}}',
               r'{{\em E. coli}}, 37\textdegree C',
               r'{{\em E. coli}}, 37\textdegree C',
@@ -675,14 +674,9 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
                 [(inoculum_u - inoculum)/np.sqrt(len(fpts[exp][inoculum])),
                  (inoculum - inoculum_l)/np.sqrt(len(fpts[exp][inoculum]))] )
 
-    mean_growth_rates = {exp: np.mean(np.concatenate(
-                         [growth_rates[exp][elem] for elem in
-                          growth_rates[exp]])) for exp in fpts}
-
     fig, ax = plt.subplots(figsize=(4.8,4.8))
     for exp in fpts:
         mu = mus[exp]
-
         xs = sorted(list(std_fpt[exp].keys()))
         ys = [std_fpt[exp][inoculum] for inoculum in xs]
         ys = [elem*(mu/np.log(2)) for elem in ys]
@@ -702,17 +696,6 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
                         markerfacecolor=mfc[exp], zorder=10,
                         markersize=marker_size[exp], elinewidth=1.2,
                         mew=1.5)
-
-        low_bound_xs = [xs[0]]
-        low_bound_ys = [ys[0]]
-        for k in range(len(xs)):
-            if k == 0: continue
-            if ys[k] < low_bound_ys[-1]:
-                low_bound_xs.append(xs[k])
-                low_bound_ys.append(ys[k])
-
-        #ax.plot(low_bound_xs, low_bound_ys, '--', lw=1.0, color=cycle[exp+1])
-
 
     model_xs = list(range(1, 116))
     model_ys = [(1/np.log(2))*np.sqrt(sum([1/(n*n) for n in range(x,1000)])) for x in model_xs]
@@ -734,16 +717,15 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     #ax.plot(xs[:6], [40*x**(-1/2) for x in xs[:6]], color='r')
     plt.legend(fontsize=10, framealpha=1).set_zorder(13)
 
-
     std_fpt, inoculum_errs, std_fpt_errs, growth_rates = plot_each_std_fpt(fpts, growth_rates, if_plot=False)
-    print(std_fpt[4])
 
     ax_inset = ax.inset_axes([1.9, 0.12, 10, 0.35], transform=ax.transData)
     ax_inset.set_xlabel(r'$n_0$', fontsize=12, labelpad=-10)
     ax_inset.set_ylabel(r'$\sigma_t$ [hr]', fontsize=12, labelpad=-12)
+    ax_inset.set_xticks([1, 100])
+    ax_inset.tick_params(axis='both', which='major', labelsize=12)
 
-    #for exp in [1, 2, 3, 4, 5, 6]:
-    for exp in [3]:
+    for exp in [1, 2, 3, 4, 5, 6]:
         xs = list(std_fpt[exp].keys())
         xs.sort()
         ys = [std_fpt[exp][x] for x in xs]
@@ -765,9 +747,6 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
         model_xs = list(range(1, 120))
         model_ys = [(1/mu)*np.sqrt(sum([1/(n*n) for n in range(x,1000)])) for x in model_xs]
         ax_inset.plot(model_xs, model_ys, color='r', lw=2)
-
-    ax_inset.set_xticks([1, 100])
-    ax_inset.tick_params(axis='both', which='major', labelsize=12)
 
     plt.savefig('figs/Fig4.pdf', bbox_inches='tight')
     return
@@ -859,48 +838,6 @@ def plot_each_std_fpt(fpts, growth_rates, verbose=False, if_plot=True):
             plt.legend(fontsize=8)
 
             plt.savefig('figs/std_fpt_vs_inoculum_exp_{}.pdf'.format(exp), bbox_inches='tight')
-
-def plot_distribution_of_initial_ODs():
-    # to use this function, make sure that get_growth_curves returns the growth
-    # curves
-    exp_data_dict = load_exp_data_e_coli(load_data=True, if_plot=False,
-                                         return_raw_data=True)
-
-    ics = {t: [] for t in [0, 6, 12, 30, 60, 120, 240]}
-    for t in ics:
-        for exp in exp_data_dict:
-            gc = exp_data_dict[exp]
-            delta_t = gc['Time'][1] - gc['Time'][0]
-            t_index = int(t/delta_t)
-            inocula = sorted([elem for elem in set(gc.columns) if (type(elem) != str and
-                                                                  elem > 0)])
-            for inoc in inocula:
-                num_replicates = len(gc[inoc].columns)
-                for replicate in range(num_replicates):
-                    ys = gc[inoc].iloc[:,replicate]
-                    ics[t].append(ys[t_index])
-        fig, ax = plt.subplots()
-
-        threshold = 0.125
-        print(min(ics[t]))
-        print(max(ics[t]))
-        ics_white = [elem for elem in ics[t] if elem < threshold]
-        ics_red = [elem for elem in ics[t] if elem >= threshold]
-        ax.hist(ics_white, bins=np.linspace(0.08, 0.46, 77), histtype='step')
-        ax.hist(ics_red, bins=np.linspace(0.08, 0.46, 77),
-                color='red')
-
-        ax.axvline(x=threshold, color='r', lw=2)
-
-        ax.set_xlabel(r'OD at t={} min'.format(t))
-        ax.set_ylabel(r'frequency')
-        ax.axis([0.08, 0.46, 0, 500])
-        a = len(ics_red)
-        b = len(ics_white) + len(ics_red)
-        ax.text(0.2, 30, '{}\% ({}/{}) of trajectories omitted'
-                .format(int(np.round(100*a/b)), a, b), fontsize=12)
-        plt.savefig('figs/initial_OD_t_{}.pdf'.format(t), bbox_inches='tight')
-
 
 ############################################################
 # SCRIPTS FOR GENERATING MAIN TEXT FIGURES
@@ -1002,6 +939,350 @@ def generate_fig_1():
 
     plt.savefig('figs/Fig1.pdf', bbox_inches='tight')
 
+
+
+
+
+
+
+
+def get_stage_structured_FPTs(num_stages=20, growth_rate=0.025, n0=1, num_reps=10,
+                           max_abundance=10000, synchronized_at_start=False,
+                           FPT_threshold=100, return_FPT=False, load_data=True):
+
+    filename = 'vars/nonmarkovian_{}_{}_{}_{}_{}_{}_{}.pi'.format(
+        num_stages, growth_rate, n0, num_reps, max_abundance,
+        int(synchronized_at_start), FPT_threshold)
+    print(filename)
+
+    if load_data:
+        try:
+            with open(filename, 'rb') as f:
+                FPTs = pickle.load(f)
+                print(np.shape(FPTs))
+            return FPTs
+        except FileNotFoundError:
+            print('running simulation, n0=', n0)
+
+    division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*growth_rate))
+
+    max_draw = 1e5
+    np.random.seed(13*n0)
+    random_draws = division_dist.rvs(size=int(max_draw))
+
+    draw_num = 0
+    j = 0
+
+    min_markovian_timestep = 0.1
+
+    all_division_times = []
+
+    for replicate in range(num_reps):
+        if replicate % 100 == 0: print(n0, replicate)
+        division_times = []
+        to_divide = []
+        # determine the life cycle phase for each bacteria in the initial condition
+        for bacteria in range(n0):
+            if synchronized_at_start:
+                random_first_division = np.log(2)/growth_rate
+            else:
+                random_first_division = np.random.rand()*np.log(2)/growth_rate
+            division_times.append(random_first_division)
+            to_divide.append(random_first_division)
+
+        while(len(division_times) < max_abundance):
+            prev_division_time = to_divide.pop(0)
+            new_division_time = random_draws[draw_num]
+            division_times.append(new_division_time + prev_division_time)
+            to_divide.append(new_division_time + prev_division_time)
+            draw_num += 1
+
+            new_division_time = random_draws[draw_num]
+            division_times.append(new_division_time + prev_division_time)
+            to_divide.append(new_division_time + prev_division_time)
+            draw_num += 1
+
+            to_divide = sorted(to_divide)
+
+            if draw_num/max_draw > 0.9:
+                draw_num = int(np.random.rand()*max_draw/100)
+
+        division_times = sorted(division_times)
+        all_division_times.append(division_times)
+
+        if draw_num/max_draw > 0.9:
+            draw_num = int(np.random.rand()*max_draw/100)
+
+    max_time = np.max(all_division_times)
+    t_max = 100
+
+    ts = np.linspace(0, t_max, 1001)
+    ys = []
+    for replicate in range(num_reps):
+        ys.append([val + n0 for val in
+                   np.searchsorted(all_division_times[replicate], ts)])
+
+    FPTs = []
+    for replicate in range(num_reps):
+        FPTs.append(all_division_times[replicate][FPT_threshold - 1])
+
+    with open(filename, 'wb') as f:
+        pickle.dump(FPTs, f)
+
+    return FPTs
+
+def get_SBP_FPTs(mu, n0, num_reps=2000, max_abundance=1000,
+                 FPT_threshold=500):
+
+    mean_fpt = np.log(max_abundance/n0) / mu
+    t_max = 2.5*mean_fpt
+
+    p = SimulateSBP(ic=n0, t_max=t_max, num_trajs=num_reps, mu=mu)
+    ts, trajs = p.get_SBP_trajs(load_data=True)
+
+    fpts = []
+    for traj in trajs:
+        for i,measurement in enumerate(traj):
+            if i < 30: continue
+            if measurement > FPT_threshold:
+                fpts.append(ts[i])
+                break
+
+    return fpts
+
+
+
+
+
+
+
+
+
+
+
+def TSD_vs_inoculum_size_poisson_det_analytic(inocula):
+    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+
+    stds = []
+    for n0 in inocula:
+        a = 1/(mu**2)
+        np.exp(-n0)/(mu*mu*(1 - np.exp(-n0)))
+        #print(a)
+        b = [np.exp(2*np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
+             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
+             for k in range(1, 200)]
+        b = sum(b)
+        #print(b)
+
+        c = [np.exp(np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
+             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
+             for k in range(1, 200)]
+        c = sum(c)**2
+        #print(c)
+        print(n0, np.sqrt(a*(b - c)))
+        stds.append(np.sqrt(a*(b-c)))
+
+    return stds
+
+def TSD_vs_inoculum_size_stage_structured(inocula, stages=20, num_reps=2000):
+    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+
+    stds = []
+    std_cis = [[], []]
+
+    for n0 in inocula:
+        fpts = get_stage_structured_FPTs(num_stages=stages, growth_rate=mu, n0=n0,
+                 num_reps=num_reps, max_abundance=2000, synchronized_at_start=False,
+                 FPT_threshold=500, load_data=True)
+
+        stds.append(np.std(fpts))
+
+        #print('bootstrapping')
+        res = stats.bootstrap((fpts[:1000],), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        std_cis[0].append(np.std(fpts) - ci_l)
+        std_cis[1].append(ci_u - np.std(fpts))
+
+    print('EEE')
+    print(stds)
+    print(std_cis)
+    std_cis = np.array(std_cis)
+    return stds, std_cis
+
+def TSD_vs_inoculum_size_stage_structured_poisson(inocula, num_reps=2000):
+    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+
+    stds = []
+    std_cis = [[], []]
+
+    print('aa')
+    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=20, growth_rate=mu, n0=n0,
+                    num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
+                    FPT_threshold=500) for n0 in range(1,75)}
+
+    for n0 in inocula:
+        print(n0)
+        pooled_fpts = []
+        r = stats.poisson.rvs(mu=n0, size=10000)
+        for i in range(max(1, min(r)), max(r+1)):
+            num_elems = sum(r == i)
+            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
+
+        stds.append(np.std(pooled_fpts))
+
+        random.shuffle(pooled_fpts)
+
+        pooled_fpts = np.array(pooled_fpts[:1000])
+        print('bootstrapping')
+        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        std_cis[0].append(np.std(pooled_fpts) - ci_l)
+        std_cis[1].append(ci_u - np.std(pooled_fpts))
+
+    std_cis = np.array(std_cis)
+    print()
+    print('CCC')
+    print(stds)
+    print(std_cis)
+
+    return stds, std_cis
+
+def TSD_vs_inoculum_size_SBP_poisson(inocula, num_reps=2000):
+    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+    stds = []
+    std_cis = [[], []]
+    fpt_dict = {n0: get_SBP_FPTs(mu=mu, n0=n0,
+                    num_reps=num_reps, max_abundance=510,
+                    FPT_threshold=500) for n0 in range(1,59)}
+
+    for n0 in inocula:
+        pooled_fpts = []
+        r = stats.poisson.rvs(mu=n0, size=10000)
+        print(max(r))
+        for i in range(max(1, min(r)), max(r+1)):
+            num_elems = sum(r == i)
+            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
+
+        stds.append(np.std(pooled_fpts))
+
+        random.shuffle(pooled_fpts)
+
+        pooled_fpts = np.array(pooled_fpts[:1000])
+        print('bootstrapping')
+        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        std_cis[0].append(np.std(pooled_fpts) - ci_l)
+        std_cis[1].append(ci_u - np.std(pooled_fpts))
+
+    std_cis = np.array(std_cis)
+    print()
+    print(stds)
+    print(std_cis)
+
+    return stds, std_cis
+
+
+
+
+
+
+
+def generate_fig_2():
+    """Generates Figure 2 of the main text. Temporal standard deviations are
+    plotted for five stochastic models of exponential growth as a function of
+    inoculum size:
+    * populations that grow according to the simple birth process (SBP) and are
+      exactly inoculated
+    * populations with Poisson-distributed inocula that grow deterministically  
+    * populations that grow according to age-structured growth and are exactly
+      inoculated
+    * populations w/ Poisson-distributed inocula that grow according to the SBP
+    * populations w/ Poisson-distributed inocula that grow according to
+      age-structured growth.
+    In all cases, the mean division time is ~25 minutes. """
+
+    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+
+    inocula = list(set([int(x) for x in np.logspace(0, 1.5, num=25)]))
+    poisson_inocula = [x/(1 - np.exp(-x)) for x in inocula]
+
+    #inocula = list(range(1, 11))
+    #ys_SBP_num_int = TSD_vs_inoculum_size_SBP(inocula)
+    #ys_SBP_theory_lim = [(1/mu)*(sum([1/(x**2) for x in range(n0, 30)]))**0.5
+    #                 for n0 in inocula]
+    ys_SBP_theory_exact = [(1/mu)*(sum([1/(x**2) for x in range(n0, 1000)]))**0.5
+                     for n0 in inocula]
+
+
+    num_reps = 100 # 100 replicates takes ~6 minutes to run on my laptop
+    print(1)
+    ys_poisson_det = TSD_vs_inoculum_size_poisson_det_analytic(inocula)
+    print(2)
+    ys_stage_structured, ys_ss_cis = TSD_vs_inoculum_size_stage_structured(inocula,
+                                                               num_reps=num_reps)
+    print(3)
+    ys_stage_structured_poisson, ys_ss_p_cis = TSD_vs_inoculum_size_stage_structured_poisson(inocula,
+                                                               num_reps=num_reps)
+    print(4)
+    #ys_SBP_simulation = TSD_vs_inoculum_size_SBP_simulation(inocula)
+    ys_SBP_poisson, ys_sbp_p_cis = TSD_vs_inoculum_size_SBP_poisson(inocula,
+                                                               num_reps=num_reps)
+    print(5)
+
+
+
+
+    fig, ax = plt.subplots(figsize=(4.8, 4.8))
+    #ax.plot(inocula, ys_SBP_num_int, '.', color='k', label='SBP', zorder=5)
+    #ax.plot(inocula, ys_SBP_theory_lim, '-', color='orange', label='SBP')
+    #ax.plot(inocula, ys_SBP_theory_exact, '-', color='red', zorder=0, label=r'simple birth process [Eq.~(11a)]')
+    ax.plot(inocula, ys_SBP_theory_exact, '-', color='red', zorder=10, label=r'simple birth process')
+    #ax.plot(inocula, ys_SBP_simulation, marker='s', lw=0, ms=8, color='red',
+    #        label=r'simple birth process (simulations)')
+    print()
+    print('BBB')
+    print(ys_stage_structured)
+    print(ys_ss_cis)
+    print()
+    ax.errorbar(inocula, ys_stage_structured, yerr=ys_ss_cis, fmt='*', ms=18, color='#E3CF57',
+            zorder=12)
+
+    ax.plot(inocula, ys_stage_structured, '-', lw=1, color='#E3CF57', zorder=0)
+    ax.plot(poisson_inocula, ys_poisson_det, '.', color='blue', ms=21)
+            #label='Poisson inocula, deterministic [Eq.~(15)]')
+    ax.errorbar(poisson_inocula, ys_SBP_poisson, yerr=ys_sbp_p_cis, marker='D',
+                lw=1, ms=10, color='purple')
+    ax.errorbar(poisson_inocula, ys_stage_structured_poisson,
+                yerr=ys_ss_p_cis, marker='^', lw=1,
+                ms=12, color='darkgreen')
+    print(poisson_inocula)
+    print(ys_stage_structured_poisson)
+    print(ys_ss_p_cis)
+    #ax.plot(poisson_inocula, ys_stage_structured_poisson, ls='-', lw=1,
+    #        color='darkgreen', zorder=0)
+    ax.plot(poisson_inocula, ys_SBP_poisson, lw=0, color='purple')
+    ax.plot(poisson_inocula, ys_poisson_det, lw=1, color='blue', zorder=0)
+
+    ax.plot([0.01], [0.05], marker='.', ms=15, lw=0, color='blue',
+            label='Poisson inocula, deterministic')
+    ax.plot([0.01], [0.05], marker='*', ms=13, lw=0, color='#E3CF57',
+            label='age structured')
+    ax.plot([0.01], [0.05], marker='D', ms=7, lw=0, color='purple',
+            label='Poisson inocula,  SBP')
+    ax.plot([0.01], [0.05], marker='^', ms=9, lw=0, color='darkgreen',
+            label='Poisson inocula, age structured')
+
+    ax.text(12, 0.066, r'$\sigma_t \sim n_0^{-1/2}$', color='k', fontsize=12)
+    ax.plot([15, 28], [0.10, 0.10*(28/15)**(-0.5)], color='k', lw=2)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.axis([1, 30, 0.03, 1.1])
+    ax.set_xlabel('mean inoculum size $n_0$')
+    ax.set_ylabel('temporal standard deviation $\sigma_t$ [hr]')
+    lgnd = plt.legend(fontsize=8, loc='upper right')
+    plt.savefig('figs/Fig2.pdf', bbox_inches='tight')
+
+
 def generate_fig_3():
     """Generates Figure 2 of the main text. Plots
     replicate growth trajectories for E. coli (panel a), S. aureus (b),
@@ -1009,7 +1290,7 @@ def generate_fig_3():
     threshold (panel d). """
 
     threshold = 0.03
-    exp_data_dict = load_exp_data_e_coli(load_data=True, if_plot=False)
+    exp_data_dict = load_bacterial_growth_data(load_data=True, if_plot=False)
 
     fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(ncols=2, nrows=2, figsize=(6, 4.8))
 
@@ -1050,7 +1331,7 @@ def generate_fig_3():
             for x in threshold_xs:
                 print(x)
                 fake_data_dict = {0: gc}
-                fpts_dict = get_std_fpt(fake_data_dict, x)
+                fpts_dict = get_fpts(fake_data_dict, x)
                 fpts = fpts_dict[0]
                 threshold_ys.append(np.std(fpts[inoc]))
 
@@ -1106,12 +1387,6 @@ def generate_fig_3():
     plt.savefig('figs/Fig3.pdf', bbox_inches='tight')
 
 
-    #fpts = get_std_fpt(exp_data_dict, threshold=threshold)
-    #growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
-    #                                if_plot=False)
-
-    #e_coli_inocula, std_fpt_e_coli, e_coli_labels = get_experimental_temporal_variability('e_coli')
-
 def generate_fig_4():
     """Empirically calculates the standard deviation of the first passage time
     distribution at a particular abundance threshold for three experimental
@@ -1126,18 +1401,19 @@ def generate_fig_4():
                       Usage: std_fpt[exp][inoculum][replicate] = # """
     # E coli
     threshold = 0.03
-    exp_data_dict = load_exp_data_e_coli(load_data=True, if_plot=False)
+    exp_data_dict = load_bacterial_growth_data(load_data=True, if_plot=False)
 
-    fpts = get_std_fpt(exp_data_dict, threshold=threshold)
+    fpts = get_fpts(exp_data_dict, threshold=threshold)
 
     growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
                                     if_plot=False)
-    plot_each_std_fpt(fpts, growth_rates, if_plot=False)
+    #plot_each_std_fpt(fpts, growth_rates, if_plot=False)
     plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates)
 
     return 1,2,3
 
 if __name__ == "__main__":
-    generate_fig_1()
-    generate_fig_3()
-    generate_fig_4()
+    #generate_fig_1()
+    generate_fig_2()
+    #generate_fig_3()
+    #generate_fig_4()
