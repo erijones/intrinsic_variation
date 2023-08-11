@@ -946,12 +946,28 @@ def generate_fig_1():
 
 
 
-def get_stage_structured_FPTs(num_stages=20, growth_rate=0.025, n0=1, num_reps=10,
+def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
                            max_abundance=10000, synchronized_at_start=False,
-                           FPT_threshold=100, return_FPT=False, load_data=True):
+                           FPT_threshold=100, load_data=True):
+    """ Simulate the growth of replicate populations with stage-structured
+    population dynamics.
+    Inputs: num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            mu ... float, population growth rate
+            n0 ... int, inoculum size (population size at time 0)
+            num_reps ... int, number of simulated replicate trajectories
+            max_abundance ... int, largest achievable population size
+            synchronized_at_start ... bool, indicates whether inoculated individuals
+                                      start with synchronized division cycles
+            FPT_threshold ... int, threshold at which FPT is evaluated
+            return_FPT ... bool, 
+            load_data ... boolean, indicates whether data should be loaded
+    Outputs: FPTs ... list, calculated first passage times (length num_reps)
+
+    """
 
     filename = 'vars/nonmarkovian_{}_{}_{}_{}_{}_{}_{}.pi'.format(
-        num_stages, growth_rate, n0, num_reps, max_abundance,
+        num_stages, mu, n0, num_reps, max_abundance,
         int(synchronized_at_start), FPT_threshold)
     print(filename)
 
@@ -964,7 +980,7 @@ def get_stage_structured_FPTs(num_stages=20, growth_rate=0.025, n0=1, num_reps=1
         except FileNotFoundError:
             print('running simulation, n0=', n0)
 
-    division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*growth_rate))
+    division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*mu))
 
     max_draw = 1e5
     np.random.seed(13*n0)
@@ -984,9 +1000,9 @@ def get_stage_structured_FPTs(num_stages=20, growth_rate=0.025, n0=1, num_reps=1
         # determine the life cycle phase for each bacteria in the initial condition
         for bacteria in range(n0):
             if synchronized_at_start:
-                random_first_division = np.log(2)/growth_rate
+                random_first_division = np.log(2)/mu
             else:
-                random_first_division = np.random.rand()*np.log(2)/growth_rate
+                random_first_division = np.random.rand()*np.log(2)/mu
             division_times.append(random_first_division)
             to_divide.append(random_first_division)
 
@@ -1060,126 +1076,140 @@ def get_SBP_FPTs(mu, n0, num_reps=2000, max_abundance=1000,
 
 
 
-def TSD_vs_inoculum_size_poisson_det_analytic(inocula):
-    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
+def TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=1.66):
+    """ Calculate the temporal standard deviation of populations with
+    Poisson-distributed inocula that grow deterministically and exponentially.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula """
+    
+    print('plotting Fig 2 blue circles')
 
-    stds = []
+    TSDs = []
     for n0 in inocula:
         a = 1/(mu**2)
-        np.exp(-n0)/(mu*mu*(1 - np.exp(-n0)))
-        #print(a)
         b = [np.exp(2*np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
              - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
              for k in range(1, 200)]
         b = sum(b)
-        #print(b)
-
         c = [np.exp(np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
              - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
              for k in range(1, 200)]
         c = sum(c)**2
-        #print(c)
-        print(n0, np.sqrt(a*(b - c)))
-        stds.append(np.sqrt(a*(b-c)))
 
-    return stds
+        TSD = np.sqrt(a*(b - c))
+        TSDs.append(TSD)
+    return TSDs
 
-def TSD_vs_inoculum_size_stage_structured(inocula, stages=20, num_reps=2000):
-    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
 
-    stds = []
-    std_cis = [[], []]
+def TSD_vs_inoculum_size_stage_structured(inocula, mu=1.66, num_stages=20, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey stage-structured growth and are exactly inoculated.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
+
+    print('plotting Fig 2 gold stars')
+
+    TSDs = []
+    TSD_cis = [[], []]
 
     for n0 in inocula:
-        fpts = get_stage_structured_FPTs(num_stages=stages, growth_rate=mu, n0=n0,
-                 num_reps=num_reps, max_abundance=2000, synchronized_at_start=False,
+        fpts = get_stage_structured_FPTs(num_stages=num_stages, growth_rate=mu, n0=n0,
+                 num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
                  FPT_threshold=500, load_data=True)
 
-        stds.append(np.std(fpts))
-
-        #print('bootstrapping')
+        TSDs.append(np.std(fpts))
         res = stats.bootstrap((fpts[:1000],), np.std, confidence_level=0.95)
         ci_l, ci_u = res.confidence_interval
-        std_cis[0].append(np.std(fpts) - ci_l)
-        std_cis[1].append(ci_u - np.std(fpts))
+        TSD_cis[0].append(np.std(fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(fpts))
 
-    print('EEE')
-    print(stds)
-    print(std_cis)
-    std_cis = np.array(std_cis)
-    return stds, std_cis
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
 
-def TSD_vs_inoculum_size_stage_structured_poisson(inocula, num_reps=2000):
-    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
 
-    stds = []
-    std_cis = [[], []]
+def TSD_vs_inoculum_size_stage_structured_poisson(inocula, mu, num_stages=20, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey stage-structured growth and have Poisson-distributed inocula.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
 
-    print('aa')
-    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=20, growth_rate=mu, n0=n0,
+    print('plotting Fig 2 green triangles')
+
+    TSDs = []
+    TSD_cis = [[], []]
+
+    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=num_stages, growth_rate=mu, n0=n0,
                     num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
-                    FPT_threshold=500) for n0 in range(1,75)}
+                    FPT_threshold=500) for n0 in range(1,70)}
 
     for n0 in inocula:
-        print(n0)
         pooled_fpts = []
         r = stats.poisson.rvs(mu=n0, size=10000)
         for i in range(max(1, min(r)), max(r+1)):
             num_elems = sum(r == i)
             pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
-
-        stds.append(np.std(pooled_fpts))
+        TSDs.append(np.std(pooled_fpts))
 
         random.shuffle(pooled_fpts)
-
         pooled_fpts = np.array(pooled_fpts[:1000])
-        print('bootstrapping')
         res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
         ci_l, ci_u = res.confidence_interval
-        std_cis[0].append(np.std(pooled_fpts) - ci_l)
-        std_cis[1].append(ci_u - np.std(pooled_fpts))
+        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
 
-    std_cis = np.array(std_cis)
-    print()
-    print('CCC')
-    print(stds)
-    print(std_cis)
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
 
-    return stds, std_cis
 
-def TSD_vs_inoculum_size_SBP_poisson(inocula, num_reps=2000):
-    mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
-    stds = []
-    std_cis = [[], []]
-    fpt_dict = {n0: get_SBP_FPTs(mu=mu, n0=n0,
-                    num_reps=num_reps, max_abundance=510,
-                    FPT_threshold=500) for n0 in range(1,59)}
+def TSD_vs_inoculum_size_SBP_poisson(inocula, mu, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey the SBP and have Poisson-distributed inocula.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
+
+    print('plotting Fig 2 purple diamonds')
+
+    TSDs = []
+    TSD_cis = [[], []]
+    fpt_dict = {n0: get_SBP_FPTs(mu=mu, n0=n0,num_reps=num_reps,
+                                 max_abundance=510, FPT_threshold=500)
+                for n0 in range(1,70)}
 
     for n0 in inocula:
         pooled_fpts = []
         r = stats.poisson.rvs(mu=n0, size=10000)
-        print(max(r))
         for i in range(max(1, min(r)), max(r+1)):
             num_elems = sum(r == i)
             pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
-
-        stds.append(np.std(pooled_fpts))
+        TSDs.append(np.std(pooled_fpts))
 
         random.shuffle(pooled_fpts)
-
         pooled_fpts = np.array(pooled_fpts[:1000])
         print('bootstrapping')
         res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
         ci_l, ci_u = res.confidence_interval
-        std_cis[0].append(np.std(pooled_fpts) - ci_l)
-        std_cis[1].append(ci_u - np.std(pooled_fpts))
+        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
 
-    std_cis = np.array(std_cis)
-    print()
-    print(stds)
-    print(std_cis)
-
-    return stds, std_cis
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
 
 
 
@@ -1202,32 +1232,21 @@ def generate_fig_2():
     In all cases, the mean division time is ~25 minutes. """
 
     mu = 1.66 # units: 1/hr. selected so that mean division time is 25 minutes.
-
     inocula = list(set([int(x) for x in np.logspace(0, 1.5, num=25)]))
     poisson_inocula = [x/(1 - np.exp(-x)) for x in inocula]
 
-    #inocula = list(range(1, 11))
-    #ys_SBP_num_int = TSD_vs_inoculum_size_SBP(inocula)
-    #ys_SBP_theory_lim = [(1/mu)*(sum([1/(x**2) for x in range(n0, 30)]))**0.5
-    #                 for n0 in inocula]
-    ys_SBP_theory_exact = [(1/mu)*(sum([1/(x**2) for x in range(n0, 1000)]))**0.5
-                     for n0 in inocula]
+    num_reps = 100 # 100 replicates takes ~6 minutes to run on my laptop;
+                   # the main text plot uses 2000 replicates (~2 hours)
 
-
-    num_reps = 100 # 100 replicates takes ~6 minutes to run on my laptop
-    print(1)
-    ys_poisson_det = TSD_vs_inoculum_size_poisson_det_analytic(inocula)
-    print(2)
+    ys_SBP_theory_exact = [(1/mu)*(sum([1/(x**2) for x in range(n0, 10000)]))**0.5
+                           for n0 in inocula]
+    ys_poisson_det = TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=mu)
     ys_stage_structured, ys_ss_cis = TSD_vs_inoculum_size_stage_structured(inocula,
                                                                num_reps=num_reps)
-    print(3)
     ys_stage_structured_poisson, ys_ss_p_cis = TSD_vs_inoculum_size_stage_structured_poisson(inocula,
                                                                num_reps=num_reps)
-    print(4)
-    #ys_SBP_simulation = TSD_vs_inoculum_size_SBP_simulation(inocula)
     ys_SBP_poisson, ys_sbp_p_cis = TSD_vs_inoculum_size_SBP_poisson(inocula,
                                                                num_reps=num_reps)
-    print(5)
 
 
 
