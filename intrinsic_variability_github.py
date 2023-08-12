@@ -116,10 +116,11 @@ def load_bacterial_growth_data(load_data=True, verbose=False, if_plot=False,
         try:
             with open('vars/e_coli_growth_curves.pi', 'rb') as f:
                 exp_gcs = pickle.load(f)
-                print('loaded bacterial growth curves')
+                #print('loaded bacterial growth curves')
                 return exp_gcs
         except FileNotFoundError:
-            print('loading bacterial growth curves')
+            True
+            #print('loading bacterial growth curves')
 
     # scan over raw data files to identify when experiments were performed
     # E. coli experiments: 05-03-22, 05-19-22, 05-25-22, 06-01-22, 06-15-22
@@ -373,7 +374,7 @@ def get_growth_curves(f1, f2, date, plate_num, if_plot=False,
 # HELPER FUNCTIONS
 ##############################
 
-def get_fpts(data_dict, threshold, verbose=False):
+def get_FPTs(data_dict, threshold, verbose=False):
     """Calculates the standard deviation of the first passage time distribution
     at a threshold, for each set of replicate trajectories stored in data_dict.
     Inputs: data_dict ... dict, contains replicate trajectories
@@ -527,6 +528,266 @@ def get_sub_growth_rates(growth_rates, return_dist=False):
         return growth_rates_a, growth_rates_b, growth_rates_c
 
     return mu_a, mu_b, mu_c
+
+
+############################################################
+# STOCHASTIC GROWTH SIMULATION FUNCTIONS 
+############################################################
+
+def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
+                           max_abundance=10000, synchronized_at_start=False,
+                           FPT_threshold=100, load_data=True):
+    """ Perform agent-based simulations of replicate populations with stage-structured
+    population dynamics.
+    Inputs: num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            mu ... float, population growth rate
+            n0 ... int, inoculum size (population size at time 0)
+            num_reps ... int, number of simulated replicate trajectories
+            max_abundance ... int, largest achievable population size
+            synchronized_at_start ... bool, indicates whether inoculated individuals
+                                      start with synchronized division cycles
+            FPT_threshold ... int, threshold at which FPT is evaluated
+            load_data ... bool, indicates whether data should be loaded
+    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
+
+    # (make sure that a ./vars directory exists)
+    filename = 'vars/stage_structured_{}_{}_{}_{}_{}_{}_{}.pi'.format(
+        num_stages, mu, n0, num_reps, max_abundance,
+        int(synchronized_at_start), FPT_threshold)
+
+    # don't re-run simulations if you've already done them + saved the results:
+    if load_data:
+        try:
+            with open(filename, 'rb') as f:
+                FPTs = pickle.load(f)
+            return FPTs
+        except FileNotFoundError:
+            True
+            #continue
+
+    # the division time distribution of a 20-stage growth model is given by a
+    # chi-squared distribution with 40 degrees of freedom:
+    division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*mu))
+
+    max_draw = 4e5 # number of random numbers stored in memory at a time
+    np.random.seed(13*n0)
+    random_draws = division_dist.rvs(size=int(max_draw)) # list of chi-squared
+                                                         # distributed numbers
+    draw_num = 0 # number of random numbers that have been used so far
+    all_division_times = [] # list of list of times at which divisions occurred
+
+    for replicate in range(num_reps):
+        division_times = [] # times when an organism did divide (past)
+        to_divide = [] # times when an organism will next divide (future)
+
+        # set division cycle location for bacteria in initial condition
+        for bacteria in range(n0):
+            if synchronized_at_start:
+                # all bacteria divide after exactly 1 division time:
+                random_first_division = np.log(2)/mu 
+            else:
+                # bacteria divide uniformly randomly within 1 division time:
+                random_first_division = np.random.rand()*np.log(2)/mu
+            division_times.append(random_first_division)
+            to_divide.append(random_first_division)
+        to_divide = sorted(to_divide) # ensure soonest division event is first
+
+        # each iteration through the while loop increments abundance by 1
+        while(len(division_times) < max_abundance):
+            # two new daughter cells (that later divide) born from each mother
+            prev_division_time = to_divide.pop(0)
+            new_division_time = random_draws[draw_num]
+            division_times.append(new_division_time + prev_division_time)
+            to_divide.append(new_division_time + prev_division_time)
+            draw_num += 1
+
+            new_division_time = random_draws[draw_num]
+            division_times.append(new_division_time + prev_division_time)
+            to_divide.append(new_division_time + prev_division_time)
+            draw_num += 1
+
+            to_divide = sorted(to_divide)
+
+            if draw_num/max_draw > 0.9:
+                draw_num = int(np.random.rand()*max_draw/100) 
+
+        division_times = sorted(division_times)
+        all_division_times.append(division_times)
+
+        if draw_num/max_draw > 0.9:
+            draw_num = int(np.random.rand()*max_draw/100)
+
+    FPTs = []
+    for replicate in range(num_reps):
+        FPTs.append(all_division_times[replicate][FPT_threshold - 1])
+
+    with open(filename, 'wb') as f:
+        pickle.dump(FPTs, f)
+
+    return FPTs
+
+
+def get_SBP_FPTs(mu, n0, num_reps=2000, max_abundance=1000,
+                 FPT_threshold=500, load_data=True):
+    """ Perform simple birth process simulations of replicate populations. 
+    Inputs: mu ... float, population growth rate
+            n0 ... int, inoculum size (population size at time 0)
+            num_reps ... int, number of simulated replicate trajectories
+            max_abundance ... int, largest achievable population size
+            FPT_threshold ... int, threshold at which FPT is evaluated
+            load_data ... bool, indicates whether data should be loaded
+    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
+
+    mean_FPT = np.log(max_abundance/n0) / mu
+    t_max = 2.5*mean_FPT # simulate long enough to reach FPT threshold
+
+    p = SimulateSBP(ic=n0, t_max=t_max, num_trajs=num_reps, mu=mu)
+    ts, trajs = p.get_SBP_trajs(load_data=load_data)
+
+    FPTs = []
+    for traj in trajs:
+        for i,measurement in enumerate(traj):
+            if measurement >= FPT_threshold:
+                FPTs.append(ts[i])
+                break
+
+    return FPTs
+
+
+def TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=1.66):
+    """ Calculate the temporal standard deviation of populations with
+    Poisson-distributed inocula that grow deterministically and exponentially.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula """
+    
+    print(' blue circles')
+
+    TSDs = []
+    for n0 in inocula:
+        a = 1/(mu**2)
+        b = [np.exp(2*np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
+             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
+             for k in range(2, 200)]
+        b = sum(b)
+        c = [np.exp(np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
+             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
+             for k in range(2, 200)]
+        c = sum(c)**2
+
+        TSD = np.sqrt(a*(b - c))
+        TSDs.append(TSD)
+    return TSDs
+
+
+def TSD_vs_inoculum_size_stage_structured(inocula, mu=1.66, num_stages=20, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey stage-structured growth and are exactly inoculated.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
+
+    print(' gold stars')
+
+    TSDs = []
+    TSD_cis = [[], []]
+
+    for n0 in inocula:
+        fpts = get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
+                 num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
+                 FPT_threshold=500, load_data=True)
+
+        TSDs.append(np.std(fpts))
+        res = stats.bootstrap((fpts[:1000],), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        TSD_cis[0].append(np.std(fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(fpts))
+
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
+
+
+def TSD_vs_inoculum_size_stage_structured_poisson(inocula, mu, num_stages=20, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey stage-structured growth and have Poisson-distributed inocula.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_stages ... int, number of stages required for cell division
+                       (operationally this changes the division time distribution)
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
+
+    print(' green triangles')
+
+    TSDs = []
+    TSD_cis = [[], []]
+
+    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
+                    num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
+                    FPT_threshold=500) for n0 in range(1,70)}
+
+    for n0 in inocula:
+        pooled_fpts = []
+        r = stats.poisson.rvs(mu=n0, size=10000)
+        for i in range(max(1, min(r)), max(r+1)):
+            num_elems = sum(r == i)
+            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
+        TSDs.append(np.std(pooled_fpts))
+
+        random.shuffle(pooled_fpts)
+        pooled_fpts = np.array(pooled_fpts[:1000])
+        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
+
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
+
+
+def TSD_vs_inoculum_size_SBP_poisson(inocula, mu, num_reps=2000):
+    """ Calculate the TSDs of simulated abundance trajectories for populations
+    that obey the SBP and have Poisson-distributed inocula.
+    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
+            mu ... float, population growth rate
+            num_reps ... int, number of simulated replicate trajectories
+    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
+             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
+                         of TSDs """
+
+    print(' purple diamonds')
+
+    TSDs = []
+    TSD_cis = [[], []]
+    fpt_dict = {n0: get_SBP_FPTs(mu=mu, n0=n0,num_reps=num_reps,
+                                 max_abundance=510, FPT_threshold=500)
+                for n0 in range(1,70)}
+
+    for n0 in inocula:
+        pooled_fpts = []
+        r = stats.poisson.rvs(mu=n0, size=10000)
+        for i in range(max(1, min(r)), max(r+1)):
+            num_elems = sum(r == i)
+            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
+        TSDs.append(np.std(pooled_fpts))
+
+        random.shuffle(pooled_fpts)
+        pooled_fpts = np.array(pooled_fpts[:1000])
+        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
+        ci_l, ci_u = res.confidence_interval
+        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
+        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
+
+    TSD_cis = np.array(TSD_cis)
+    return TSDs, TSD_cis
 
 
 ##############################
@@ -752,6 +1013,7 @@ def plot_std_fpt_vs_inoculum_normalized(fpts, growth_rates, verbose=False):
     plt.savefig('figs/Fig4.pdf', bbox_inches='tight')
     return
 
+
 def plot_each_std_fpt(fpts, growth_rates, verbose=False, if_plot=True):
     """Plot the standard deviation of the first passage time distribution for
     each experiment. Each experiment typically consists of six inoculum sizes.
@@ -839,6 +1101,177 @@ def plot_each_std_fpt(fpts, growth_rates, verbose=False, if_plot=True):
             plt.legend(fontsize=8)
 
             plt.savefig('figs/std_fpt_vs_inoculum_exp_{}.pdf'.format(exp), bbox_inches='tight')
+
+
+def plot_inferred_mus(ax, verbose=False):
+    """Plot measured (slope of log-transformed abundance) and inferred (TSD and
+    inoculum size) for each organism, growth condition, and inoculum size.
+    Inputs: ax ... axes, canvas for the plot
+            verbose ... bool, indicates whether to print diagnostic text
+    Outputs: ax ... axes, same as input but drawn on """
+
+    threshold = 0.03
+    exp_data_dict = load_bacterial_growth_data(load_data=True, if_plot=False)
+    fpts = get_FPTs(exp_data_dict, threshold=threshold)
+    growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
+                                    if_plot=False)
+
+    ax.text(0.5, 2.4, r'{\bf a)}', color='k', fontsize=16)
+    inferred_growth_rates_a = [] # E. coli at 37C
+    inferred_growth_rates_b = [] # E. coli at 25C
+    inferred_growth_rates_c = [] # S. aureus at 37C
+    for exp in fpts:
+        min_growth_rates = []
+        for inoc in fpts[exp]:
+            TSD = np.std(fpts[exp][inoc])
+            harmonic_sum = sum([1/(x*x) for x in np.linspace(inoc, inoc+50000, 50001)])
+            inferred_mu = (1/TSD) * np.sqrt(harmonic_sum)
+            min_growth_rates.append(inferred_mu)
+        if exp in [1, 2, 3]:
+            inferred_growth_rates_a += min_growth_rates
+        if exp in [4]:
+            inferred_growth_rates_b += min_growth_rates
+        if exp in [5, 6]:
+            inferred_growth_rates_c += min_growth_rates
+
+    # get measured growth rates:
+    mu_a, mu_b, mu_c = get_sub_growth_rates(growth_rates, return_dist=True)
+
+    if verbose:
+        print('E. coli, 37C')
+        print(' inferred:', np.max(inferred_growth_rates_a), 'measured:', np.mean(mu_a))
+        print('E. coli, 25C')
+        print(' inferred:', np.max(inferred_growth_rates_b), 'measured:', np.mean(mu_b))
+        print('S. aureus, 37C')
+        print(' inferred:', np.max(inferred_growth_rates_c), 'measured:', np.mean(mu_c))
+
+    xs = [1, 2, 3]
+    ys_inferred = [max(inferred_growth_rates_a), max(inferred_growth_rates_b),
+                   max(inferred_growth_rates_c)]
+    ys_measured = [np.mean(mu_a), np.mean(mu_b), np.mean(mu_c)]
+
+    y_errs = [] # bootstrap 68% CIs for measured growth rates:
+    for mu_i in [mu_a, mu_b, mu_c]:
+        mu_i = np.sort(mu_i)
+        res = stats.bootstrap((mu_i,), np.mean, confidence_level=0.68,
+                              n_resamples=5000)
+        ci_l, ci_u = res.confidence_interval
+        y_errs.append([np.mean(mu_i) - ci_l, ci_u - np.mean(mu_i)])
+    y_errs = np.array(y_errs).T
+
+    ax.errorbar(xs, ys_measured, yerr=y_errs, fmt='o', color='k', markersize=6,
+                label=r'measured')
+    ax.plot(xs, ys_inferred, '.', color='r', markersize=5, label='inferred lower bound')
+
+    # plot inferred growth rates:
+    for idx,growth_rate_set in enumerate([inferred_growth_rates_a,
+                                          inferred_growth_rates_b,
+                                          inferred_growth_rates_c]):
+        for mu_i in growth_rate_set:
+            if idx==0 and abs(mu_i - 1.43) < 0.01: # for the "blue star" special case:
+                ax.plot(idx+1, mu_i, '*', color='blue', ms=10, zorder=10)
+            else:
+                ax.plot(idx+1, mu_i, '.', color='red', ms=5)
+
+    ax.set_ylabel(r'growth rate [1/hr]', fontsize=18, labelpad=10)
+    ax.set_xticks([1, 2, 3])
+    ax.set_xticklabels([r'{\em E.~coli} 37\textdegree C \\ \hspace*{0.1em} (17 inoc.~sizes)',
+                        r'{\em E.~coli} 25\textdegree C \\ \hspace*{0.4em} (6 inoc.~sizes)',
+                        r'{\em S.~aureus} 37\textdegree C \\ \hspace*{0.7em} (12 inoc.~sizes)'],
+                       fontsize=14)
+    ax.set_yticks([0, 1, 2])
+    ax.axis([None, None, 0, 2.5])
+    ax.tick_params(axis='x', which='major', pad=10)
+
+    # from https://stackoverflow.com/questions/22263807/how-is-order-of-items-in-matplotlib-legend-determined
+    handles, labels = ax.get_legend_handles_labels()
+    order = [1,0]
+    ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],
+               fontsize=12, loc='upper center')
+
+    return ax
+
+
+def plot_mu_inference_precision(ax, verbose=False):
+    """Plot 68% CIs for inferred growth rates based on bootstrap resampling,
+    based on growth trajectories from inoculum size 2.8 in E. coli at 37C. 
+    Inputs: ax ... axes, canvas for the plot
+            verbose ... bool, indicates whether to print diagnostic text
+    Outputs: ax ... axes, same as input but drawn on """
+
+    threshold = 0.03
+    exp_data_dict = load_bacterial_growth_data(load_data=True, if_plot=False)
+    fpts = get_FPTs(exp_data_dict, threshold=threshold)
+    growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
+                                    if_plot=False)
+    mu_a, mu_b, mu_c = get_sub_growth_rates(growth_rates, return_dist=True)
+    measured_growth_rate = np.mean(mu_a)
+
+    exp = 1; inoc = 2.8
+    candidate_fpts = fpts[exp][inoc]
+
+    TSD = np.std(candidate_fpts, ddof=1) # ddof=1 relevant for few replicates
+    harmonic_sum = sum([1/(x*x) for x in np.linspace(inoc, inoc+50000, 50001)])
+    inferred_mu = (1/TSD) * np.sqrt(harmonic_sum)
+
+    # calculate error bars for n=47 replicates
+    num_resamples = 5000
+    inferred_mus = []
+    for i in range(num_resamples):
+        bootstrap_fpts = np.random.choice(candidate_fpts, 47)
+        bootstrap_TSD = np.std(bootstrap_fpts, ddof=1)
+        inferred_mu = (1/bootstrap_TSD) * np.sqrt(harmonic_sum)
+        inferred_mus.append(inferred_mu)
+    inferred_mus = np.sort(inferred_mus)
+
+    inferred_mu = np.mean(inferred_mus)
+    lower_68_mu = inferred_mus[int(16*num_resamples/100)]
+    upper_68_mu = inferred_mus[int(84*num_resamples/100)]
+
+    ax.errorbar([47], [inferred_mu], yerr=[[inferred_mu - lower_68_mu],
+               [upper_68_mu - inferred_mu]], marker='*', color='blue', ms=20,
+                zorder=5)
+
+    # x-values for panel b:
+    num_elements = [5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 23, 25, 29, 32,
+                    37, 41]
+    harmonic_sum = sum([1/(x*x) for x in np.linspace(inoc, inoc+50000, 50001)])
+    means = []
+    lowers = []
+    uppers = []
+    for num_element in num_elements:
+        inferred_mus = []
+        for i in range(num_resamples):
+            bootstrap_fpts = np.random.choice(candidate_fpts, num_element)
+            bootstrap_TSD = np.std(bootstrap_fpts, ddof=1)
+            inferred_mu = (1/bootstrap_TSD) * np.sqrt(harmonic_sum)
+            inferred_mus.append(inferred_mu)
+        inferred_mus = np.sort(inferred_mus)
+        lower_68_mu = inferred_mus[int(16*num_resamples/100)]
+        upper_68_mu = inferred_mus[int(84*num_resamples/100)]
+        mean = np.mean(inferred_mus)
+
+        means.append(mean)
+        lowers.append(mean - lower_68_mu)
+        uppers.append(upper_68_mu - mean)
+
+    ax.errorbar(num_elements, means, yerr=[lowers, uppers], fmt='.', color='b',
+                label='inferred lower bound', ms=13)
+
+    ax.axhline(y=measured_growth_rate, color='k', ls='--', label='measured', lw=2)
+
+    ax.set_xlabel('\# replicates', fontsize=18)
+    ax.set_ylabel(r'growth rate [1/hr]', fontsize=18, labelpad=10)
+    ax.set_xticks([10, 50])
+    ax.set_xticklabels([10, 50])
+    ax.set_yticks([0, 1, 2])
+    ax.set_xscale('log')
+    ax.axis([4.5, 52, 0, 2.5])
+    plt.legend(fontsize=12, loc='lower center')
+    ax.text(2.46, 2.4, r'{\bf b)}', color='k', fontsize=16)
+
+    return ax
+
 
 ############################################################
 # SCRIPTS FOR GENERATING MAIN TEXT FIGURES
@@ -941,289 +1374,6 @@ def generate_fig_1():
     plt.savefig('figs/Fig1.pdf', bbox_inches='tight')
 
 
-
-
-
-
-
-
-def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
-                           max_abundance=10000, synchronized_at_start=False,
-                           FPT_threshold=100, load_data=True):
-    """ Perform agent-based simulations of replicate populations with stage-structured
-    population dynamics.
-    Inputs: num_stages ... int, number of stages required for cell division
-                       (operationally this changes the division time distribution)
-            mu ... float, population growth rate
-            n0 ... int, inoculum size (population size at time 0)
-            num_reps ... int, number of simulated replicate trajectories
-            max_abundance ... int, largest achievable population size
-            synchronized_at_start ... bool, indicates whether inoculated individuals
-                                      start with synchronized division cycles
-            FPT_threshold ... int, threshold at which FPT is evaluated
-            load_data ... bool, indicates whether data should be loaded
-    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
-
-    # (make sure that a ./vars directory exists)
-    filename = 'vars/stage_structured_{}_{}_{}_{}_{}_{}_{}.pi'.format(
-        num_stages, mu, n0, num_reps, max_abundance,
-        int(synchronized_at_start), FPT_threshold)
-
-    # don't re-run simulations if you've already done them + saved the results:
-    if load_data:
-        try:
-            with open(filename, 'rb') as f:
-                FPTs = pickle.load(f)
-            return FPTs
-        except FileNotFoundError:
-            True
-            #continue
-
-    # the division time distribution of a 20-stage growth model is given by a
-    # chi-squared distribution with 40 degrees of freedom:
-    division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*mu))
-
-    max_draw = 4e5 # number of random numbers stored in memory at a time
-    np.random.seed(13*n0)
-    random_draws = division_dist.rvs(size=int(max_draw)) # list of chi-squared
-                                                         # distributed numbers
-    draw_num = 0 # number of random numbers that have been used so far
-    all_division_times = [] # list of list of times at which divisions occurred
-
-    for replicate in range(num_reps):
-        division_times = [] # times when an organism did divide (past)
-        to_divide = [] # times when an organism will next divide (future)
-
-        # set division cycle location for bacteria in initial condition
-        for bacteria in range(n0):
-            if synchronized_at_start:
-                # all bacteria divide after exactly 1 division time:
-                random_first_division = np.log(2)/mu 
-            else:
-                # bacteria divide uniformly randomly within 1 division time:
-                random_first_division = np.random.rand()*np.log(2)/mu
-            division_times.append(random_first_division)
-            to_divide.append(random_first_division)
-        to_divide = sorted(to_divide) # ensure soonest division event is first
-
-        # each iteration through the while loop increments abundance by 1
-        while(len(division_times) < max_abundance):
-            # two new daughter cells (that later divide) born from each mother
-            prev_division_time = to_divide.pop(0)
-            new_division_time = random_draws[draw_num]
-            division_times.append(new_division_time + prev_division_time)
-            to_divide.append(new_division_time + prev_division_time)
-            draw_num += 1
-
-            new_division_time = random_draws[draw_num]
-            division_times.append(new_division_time + prev_division_time)
-            to_divide.append(new_division_time + prev_division_time)
-            draw_num += 1
-
-            to_divide = sorted(to_divide)
-
-            if draw_num/max_draw > 0.9:
-                draw_num = int(np.random.rand()*max_draw/100) 
-
-        division_times = sorted(division_times)
-        all_division_times.append(division_times)
-
-        if draw_num/max_draw > 0.9:
-            draw_num = int(np.random.rand()*max_draw/100)
-
-    # if interested in temporal population dynamics:
-    #t_max = 100
-    #ts = np.linspace(0, t_max, 1001)
-    #ys = []
-    #for replicate in range(num_reps):
-    #    ys.append([val + n0 for val in
-    #               np.searchsorted(all_division_times[replicate], ts)])
-
-    FPTs = []
-    for replicate in range(num_reps):
-        FPTs.append(all_division_times[replicate][FPT_threshold - 1])
-
-    with open(filename, 'wb') as f:
-        pickle.dump(FPTs, f)
-
-    return FPTs
-
-def get_SBP_FPTs(mu, n0, num_reps=2000, max_abundance=1000,
-                 FPT_threshold=500, load_data=True):
-    """ Perform simple birth process simulations of replicate populations. 
-    Inputs: mu ... float, population growth rate
-            n0 ... int, inoculum size (population size at time 0)
-            num_reps ... int, number of simulated replicate trajectories
-            max_abundance ... int, largest achievable population size
-            FPT_threshold ... int, threshold at which FPT is evaluated
-            load_data ... bool, indicates whether data should be loaded
-    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
-
-    mean_FPT = np.log(max_abundance/n0) / mu
-    t_max = 2.5*mean_FPT # simulate long enough to reach FPT threshold
-
-    p = SimulateSBP(ic=n0, t_max=t_max, num_trajs=num_reps, mu=mu)
-    ts, trajs = p.get_SBP_trajs(load_data=load_data)
-
-    FPTs = []
-    for traj in trajs:
-        for i,measurement in enumerate(traj):
-            if measurement >= FPT_threshold:
-                FPTs.append(ts[i])
-                break
-
-    return FPTs
-
-
-
-
-
-
-
-
-
-
-
-def TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=1.66):
-    """ Calculate the temporal standard deviation of populations with
-    Poisson-distributed inocula that grow deterministically and exponentially.
-    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
-            mu ... float, population growth rate
-    Outputs: TSDs ... list, TSDs for each inoculum size in inocula """
-    
-    print('plotting Fig 2 blue circles')
-
-    TSDs = []
-    for n0 in inocula:
-        a = 1/(mu**2)
-        b = [np.exp(2*np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
-             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
-             for k in range(2, 200)]
-        b = sum(b)
-        c = [np.exp(np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
-             - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
-             for k in range(2, 200)]
-        c = sum(c)**2
-
-        TSD = np.sqrt(a*(b - c))
-        TSDs.append(TSD)
-    return TSDs
-
-
-def TSD_vs_inoculum_size_stage_structured(inocula, mu=1.66, num_stages=20, num_reps=2000):
-    """ Calculate the TSDs of simulated abundance trajectories for populations
-    that obey stage-structured growth and are exactly inoculated.
-    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
-            mu ... float, population growth rate
-            num_stages ... int, number of stages required for cell division
-                       (operationally this changes the division time distribution)
-            num_reps ... int, number of simulated replicate trajectories
-    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
-             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
-                         of TSDs """
-
-    print('plotting Fig 2 gold stars')
-
-    TSDs = []
-    TSD_cis = [[], []]
-
-    for n0 in inocula:
-        fpts = get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
-                 num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
-                 FPT_threshold=500, load_data=True)
-
-        TSDs.append(np.std(fpts))
-        res = stats.bootstrap((fpts[:1000],), np.std, confidence_level=0.95)
-        ci_l, ci_u = res.confidence_interval
-        TSD_cis[0].append(np.std(fpts) - ci_l)
-        TSD_cis[1].append(ci_u - np.std(fpts))
-
-    TSD_cis = np.array(TSD_cis)
-    return TSDs, TSD_cis
-
-
-def TSD_vs_inoculum_size_stage_structured_poisson(inocula, mu, num_stages=20, num_reps=2000):
-    """ Calculate the TSDs of simulated abundance trajectories for populations
-    that obey stage-structured growth and have Poisson-distributed inocula.
-    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
-            mu ... float, population growth rate
-            num_stages ... int, number of stages required for cell division
-                       (operationally this changes the division time distribution)
-            num_reps ... int, number of simulated replicate trajectories
-    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
-             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
-                         of TSDs """
-
-    print('plotting Fig 2 green triangles')
-
-    TSDs = []
-    TSD_cis = [[], []]
-
-    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
-                    num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
-                    FPT_threshold=500) for n0 in range(1,70)}
-
-    for n0 in inocula:
-        pooled_fpts = []
-        r = stats.poisson.rvs(mu=n0, size=10000)
-        for i in range(max(1, min(r)), max(r+1)):
-            num_elems = sum(r == i)
-            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
-        TSDs.append(np.std(pooled_fpts))
-
-        random.shuffle(pooled_fpts)
-        pooled_fpts = np.array(pooled_fpts[:1000])
-        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
-        ci_l, ci_u = res.confidence_interval
-        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
-        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
-
-    TSD_cis = np.array(TSD_cis)
-    return TSDs, TSD_cis
-
-
-def TSD_vs_inoculum_size_SBP_poisson(inocula, mu, num_reps=2000):
-    """ Calculate the TSDs of simulated abundance trajectories for populations
-    that obey the SBP and have Poisson-distributed inocula.
-    Inputs: inocula ... list, inoculum sizes the TSD should be computed for
-            mu ... float, population growth rate
-            num_reps ... int, number of simulated replicate trajectories
-    Outputs: TSDs ... list, TSDs for each inoculum size in inocula
-             TSD_cis ... 2xN np.array, upper and lower 95% confidence intervals
-                         of TSDs """
-
-    print('plotting Fig 2 purple diamonds')
-
-    TSDs = []
-    TSD_cis = [[], []]
-    fpt_dict = {n0: get_SBP_FPTs(mu=mu, n0=n0,num_reps=num_reps,
-                                 max_abundance=510, FPT_threshold=500)
-                for n0 in range(1,70)}
-
-    for n0 in inocula:
-        pooled_fpts = []
-        r = stats.poisson.rvs(mu=n0, size=10000)
-        for i in range(max(1, min(r)), max(r+1)):
-            num_elems = sum(r == i)
-            pooled_fpts = pooled_fpts + list(np.random.choice(fpt_dict[i], size=num_elems))
-        TSDs.append(np.std(pooled_fpts))
-
-        random.shuffle(pooled_fpts)
-        pooled_fpts = np.array(pooled_fpts[:1000])
-        res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
-        ci_l, ci_u = res.confidence_interval
-        TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
-        TSD_cis[1].append(ci_u - np.std(pooled_fpts))
-
-    TSD_cis = np.array(TSD_cis)
-    return TSDs, TSD_cis
-
-
-
-
-
-
-
 def generate_fig_2():
     """Generates Figure 2 of the main text. Temporal standard deviations are
     plotted for five stochastic models of exponential growth as a function of
@@ -1318,9 +1468,6 @@ def generate_fig_3():
     for j,(gc,inocs,ax,title) in enumerate(
             [[exp_data_dict[3], [1.8, 16.1, 80.7], ax0, labels[3]],
              [exp_data_dict[6], [1.6, 4.2, 30.0], ax1, labels[6]]]):
-        #inocula = sorted([elem for elem in set(gc.columns) if (type(elem) != str and
-        #                                                      elem > 0)])
-        #print(exp, inocula)
         ax = plot_growth_trajectories(gc, plotted_inocula=inocs, ax=ax,
                                       fontsize=12, time_units='hr',
                                       plot_std=False, if_plot=False)
@@ -1330,23 +1477,23 @@ def generate_fig_3():
 
         inocula = sorted([elem for elem in set(gc.columns) if (type(elem) != str and
                                                                elem > 0)])
-        #cycle = plt.cm.nipy_spectral(np.linspace(0,1,len(inocula)+1))[::-1]
         cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
         threshold_xs = np.logspace(np.log10(0.005), 0, 51)
 
         letters = ['a)', 'b)']
         ax.text(-4.5, 1, letters[j], fontsize=14, fontweight='bold')
 
-
         for i,inoc in enumerate(inocula):
             if inoc not in inocs: continue
             threshold_ys = []
             for x in threshold_xs:
-                print(x)
                 fake_data_dict = {0: gc}
-                fpts_dict = get_fpts(fake_data_dict, x)
-                fpts = fpts_dict[0]
-                threshold_ys.append(np.std(fpts[inoc]))
+                FPTs_dict = get_FPTs(fake_data_dict, x)
+                FPTs = FPTs_dict[0]
+                if len(FPTs[inoc]) > 0:
+                    threshold_ys.append(np.std(FPTs[inoc]))
+                else:
+                    threshold_ys.append(None)
 
             threshold_labels = [r'{{\em E. coli}} ({})'.format(inoc),
                       r'{{\em S. aureus}} ({})'.format(inoc)]
@@ -1367,7 +1514,6 @@ def generate_fig_3():
 
     ax3.text(0.0028, 4, 'd)', fontsize=14, fontweight='bold')
 
-
     growth_rates = get_growth_rates(exp_data_dict, threshold=threshold)
 
     for exp in growth_rates:
@@ -1387,14 +1533,12 @@ def generate_fig_3():
                 histtype='step', label=label)
         legend = ax2.legend(fontsize=6, loc='upper left')
         #legend.get_title().set_fontsize('6')
-        print('a', np.mean(np.sort(exp_growth_rates)))
     ax2.set_xlabel(r'per-capita growth rate $\mu$ [1/hr]', fontsize=fontsize)
     ax2.set_ylabel(r'frequency', fontsize=fontsize)
     ax2.axis([0, 3, 0, 80])
 
     ax2.tick_params(axis='both', which='major', labelsize=fontsize)
     ax2.text(-.96, 80, 'c)', fontsize=14, fontweight='bold')
-
 
     plt.tight_layout(w_pad=0, h_pad=0)
     plt.savefig('figs/Fig3.pdf', bbox_inches='tight')
@@ -1415,9 +1559,7 @@ def generate_fig_4():
     # E coli
     threshold = 0.03
     exp_data_dict = load_bacterial_growth_data(load_data=True, if_plot=False)
-
-    fpts = get_fpts(exp_data_dict, threshold=threshold)
-
+    fpts = get_FPTs(exp_data_dict, threshold=threshold)
     growth_rates = get_growth_rates(exp_data_dict, threshold=threshold,
                                     if_plot=False)
     #plot_each_std_fpt(fpts, growth_rates, if_plot=False)
@@ -1425,8 +1567,28 @@ def generate_fig_4():
 
     return 1,2,3
 
+
+def generate_fig_5():
+    """ (a) Perform noise-based inference of growth rate for inoculum sizes,
+    organisms, and growth conditions. (b) Calculate precision of inference with
+    bootstrap resampling. """
+
+    fig, (ax0, ax1) = plt.subplots(ncols=2, figsize=(8,4.8))
+    ax = plot_inferred_mus(ax0)
+    ax = plot_mu_inference_precision(ax1)
+
+    plt.tight_layout(w_pad=-1)
+    plt.savefig('figs/Fig5.pdf', bbox_inches='tight')
+
+
 if __name__ == "__main__":
-    #generate_fig_1()
+    print('Preparing Fig 1')
+    generate_fig_1()
+    print('Preparing Fig 2')
     generate_fig_2()
-    #generate_fig_3()
-    #generate_fig_4()
+    print('Preparing Fig 3')
+    generate_fig_3()
+    print('Preparing Fig 4')
+    generate_fig_4()
+    print('Preparing Fig 5')
+    generate_fig_5()
