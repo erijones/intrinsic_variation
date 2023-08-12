@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 #
-# intrinsic_variability_CLEAN_12-15-22.py
+# intrinsic_variability_github.py
 # Eric W. Jones (jones.eric93@gmail.com)
 #
 # This software file performs numerical simulations and generates figures for
-# the manuscript "The signal in the noise: intrinsic variability in
-# exponentially growing systems"
+# the manuscript "The signal in the noise: temporal variation in exponentially
+# growing populations"
 #
 ###############################################################################
 
