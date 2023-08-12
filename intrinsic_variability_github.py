@@ -74,10 +74,11 @@ class SimulateSBP():
             try:
                 with open('vars/SBP_numerical_{}.pi'.format(p.ext_ME), 'rb') as f:
                     ts, trajs = pickle.load(f)
-                print('  loaded simple birth process simulations: {}'.format(p.ext_ME))
+                #print('  loaded simple birth process simulations: {}'.format(p.ext_ME))
                 return ts, trajs
             except FileNotFoundError:
-                print('  running simple birth process simulations: {}'.format(p.ext_ME))
+                #print('  running simple birth process simulations: {}'.format(p.ext_ME))
+                True
 
         ts = np.linspace(0, p.t_max, p.t_len)
         trajs = bd.simulate.discrete(
@@ -949,7 +950,7 @@ def generate_fig_1():
 def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
                            max_abundance=10000, synchronized_at_start=False,
                            FPT_threshold=100, load_data=True):
-    """ Simulate the growth of replicate populations with stage-structured
+    """ Perform agent-based simulations of replicate populations with stage-structured
     population dynamics.
     Inputs: num_stages ... int, number of stages required for cell division
                        (operationally this changes the division time distribution)
@@ -960,53 +961,54 @@ def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
             synchronized_at_start ... bool, indicates whether inoculated individuals
                                       start with synchronized division cycles
             FPT_threshold ... int, threshold at which FPT is evaluated
-            return_FPT ... bool, 
-            load_data ... boolean, indicates whether data should be loaded
-    Outputs: FPTs ... list, calculated first passage times (length num_reps)
+            load_data ... bool, indicates whether data should be loaded
+    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
 
-    """
-
-    filename = 'vars/nonmarkovian_{}_{}_{}_{}_{}_{}_{}.pi'.format(
+    # (make sure that a ./vars directory exists)
+    filename = 'vars/stage_structured_{}_{}_{}_{}_{}_{}_{}.pi'.format(
         num_stages, mu, n0, num_reps, max_abundance,
         int(synchronized_at_start), FPT_threshold)
-    print(filename)
 
+    # don't re-run simulations if you've already done them + saved the results:
     if load_data:
         try:
             with open(filename, 'rb') as f:
                 FPTs = pickle.load(f)
-                print(np.shape(FPTs))
             return FPTs
         except FileNotFoundError:
-            print('running simulation, n0=', n0)
+            True
+            #continue
 
+    # the division time distribution of a 20-stage growth model is given by a
+    # chi-squared distribution with 40 degrees of freedom:
     division_dist = stats.chi2(2*num_stages, scale=np.log(2)/(2*num_stages*mu))
 
-    max_draw = 1e5
+    max_draw = 4e5 # number of random numbers stored in memory at a time
     np.random.seed(13*n0)
-    random_draws = division_dist.rvs(size=int(max_draw))
-
-    draw_num = 0
-    j = 0
-
-    min_markovian_timestep = 0.1
-
-    all_division_times = []
+    random_draws = division_dist.rvs(size=int(max_draw)) # list of chi-squared
+                                                         # distributed numbers
+    draw_num = 0 # number of random numbers that have been used so far
+    all_division_times = [] # list of list of times at which divisions occurred
 
     for replicate in range(num_reps):
-        if replicate % 100 == 0: print(n0, replicate)
-        division_times = []
-        to_divide = []
-        # determine the life cycle phase for each bacteria in the initial condition
+        division_times = [] # times when an organism did divide (past)
+        to_divide = [] # times when an organism will next divide (future)
+
+        # set division cycle location for bacteria in initial condition
         for bacteria in range(n0):
             if synchronized_at_start:
-                random_first_division = np.log(2)/mu
+                # all bacteria divide after exactly 1 division time:
+                random_first_division = np.log(2)/mu 
             else:
+                # bacteria divide uniformly randomly within 1 division time:
                 random_first_division = np.random.rand()*np.log(2)/mu
             division_times.append(random_first_division)
             to_divide.append(random_first_division)
+        to_divide = sorted(to_divide) # ensure soonest division event is first
 
+        # each iteration through the while loop increments abundance by 1
         while(len(division_times) < max_abundance):
+            # two new daughter cells (that later divide) born from each mother
             prev_division_time = to_divide.pop(0)
             new_division_time = random_draws[draw_num]
             division_times.append(new_division_time + prev_division_time)
@@ -1021,7 +1023,7 @@ def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
             to_divide = sorted(to_divide)
 
             if draw_num/max_draw > 0.9:
-                draw_num = int(np.random.rand()*max_draw/100)
+                draw_num = int(np.random.rand()*max_draw/100) 
 
         division_times = sorted(division_times)
         all_division_times.append(division_times)
@@ -1029,14 +1031,13 @@ def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
         if draw_num/max_draw > 0.9:
             draw_num = int(np.random.rand()*max_draw/100)
 
-    max_time = np.max(all_division_times)
-    t_max = 100
-
-    ts = np.linspace(0, t_max, 1001)
-    ys = []
-    for replicate in range(num_reps):
-        ys.append([val + n0 for val in
-                   np.searchsorted(all_division_times[replicate], ts)])
+    # if interested in temporal population dynamics:
+    #t_max = 100
+    #ts = np.linspace(0, t_max, 1001)
+    #ys = []
+    #for replicate in range(num_reps):
+    #    ys.append([val + n0 for val in
+    #               np.searchsorted(all_division_times[replicate], ts)])
 
     FPTs = []
     for replicate in range(num_reps):
@@ -1048,23 +1049,30 @@ def get_stage_structured_FPTs(num_stages=20, mu=0.025, n0=1, num_reps=10,
     return FPTs
 
 def get_SBP_FPTs(mu, n0, num_reps=2000, max_abundance=1000,
-                 FPT_threshold=500):
+                 FPT_threshold=500, load_data=True):
+    """ Perform simple birth process simulations of replicate populations. 
+    Inputs: mu ... float, population growth rate
+            n0 ... int, inoculum size (population size at time 0)
+            num_reps ... int, number of simulated replicate trajectories
+            max_abundance ... int, largest achievable population size
+            FPT_threshold ... int, threshold at which FPT is evaluated
+            load_data ... bool, indicates whether data should be loaded
+    Outputs: FPTs ... list, calculated first passage times (length num_reps) """
 
-    mean_fpt = np.log(max_abundance/n0) / mu
-    t_max = 2.5*mean_fpt
+    mean_FPT = np.log(max_abundance/n0) / mu
+    t_max = 2.5*mean_FPT # simulate long enough to reach FPT threshold
 
     p = SimulateSBP(ic=n0, t_max=t_max, num_trajs=num_reps, mu=mu)
-    ts, trajs = p.get_SBP_trajs(load_data=True)
+    ts, trajs = p.get_SBP_trajs(load_data=load_data)
 
-    fpts = []
+    FPTs = []
     for traj in trajs:
         for i,measurement in enumerate(traj):
-            if i < 30: continue
-            if measurement > FPT_threshold:
-                fpts.append(ts[i])
+            if measurement >= FPT_threshold:
+                FPTs.append(ts[i])
                 break
 
-    return fpts
+    return FPTs
 
 
 
@@ -1090,11 +1098,11 @@ def TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=1.66):
         a = 1/(mu**2)
         b = [np.exp(2*np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
              - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
-             for k in range(1, 200)]
+             for k in range(2, 200)]
         b = sum(b)
         c = [np.exp(np.log(np.log(k)) + k*np.log(n0) - special.gammaln(k+1)
              - n0 - np.log(1 - np.exp(-n0)), dtype=np.longdouble)
-             for k in range(1, 200)]
+             for k in range(2, 200)]
         c = sum(c)**2
 
         TSD = np.sqrt(a*(b - c))
@@ -1120,7 +1128,7 @@ def TSD_vs_inoculum_size_stage_structured(inocula, mu=1.66, num_stages=20, num_r
     TSD_cis = [[], []]
 
     for n0 in inocula:
-        fpts = get_stage_structured_FPTs(num_stages=num_stages, growth_rate=mu, n0=n0,
+        fpts = get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
                  num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
                  FPT_threshold=500, load_data=True)
 
@@ -1151,7 +1159,7 @@ def TSD_vs_inoculum_size_stage_structured_poisson(inocula, mu, num_stages=20, nu
     TSDs = []
     TSD_cis = [[], []]
 
-    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=num_stages, growth_rate=mu, n0=n0,
+    fpt_dict = {n0: get_stage_structured_FPTs(num_stages=num_stages, mu=mu, n0=n0,
                     num_reps=num_reps, max_abundance=510, synchronized_at_start=False,
                     FPT_threshold=500) for n0 in range(1,70)}
 
@@ -1202,7 +1210,6 @@ def TSD_vs_inoculum_size_SBP_poisson(inocula, mu, num_reps=2000):
 
         random.shuffle(pooled_fpts)
         pooled_fpts = np.array(pooled_fpts[:1000])
-        print('bootstrapping')
         res = stats.bootstrap((pooled_fpts,), np.std, confidence_level=0.95)
         ci_l, ci_u = res.confidence_interval
         TSD_cis[0].append(np.std(pooled_fpts) - ci_l)
@@ -1235,53 +1242,36 @@ def generate_fig_2():
     inocula = list(set([int(x) for x in np.logspace(0, 1.5, num=25)]))
     poisson_inocula = [x/(1 - np.exp(-x)) for x in inocula]
 
-    num_reps = 100 # 100 replicates takes ~6 minutes to run on my laptop;
+    num_reps = 10 # 100 replicates takes ~6 minutes to run on my laptop;
                    # the main text plot uses 2000 replicates (~2 hours)
 
     ys_SBP_theory_exact = [(1/mu)*(sum([1/(x**2) for x in range(n0, 10000)]))**0.5
                            for n0 in inocula]
     ys_poisson_det = TSD_vs_inoculum_size_poisson_det_analytic(inocula, mu=mu)
-    ys_stage_structured, ys_ss_cis = TSD_vs_inoculum_size_stage_structured(inocula,
-                                                               num_reps=num_reps)
-    ys_stage_structured_poisson, ys_ss_p_cis = TSD_vs_inoculum_size_stage_structured_poisson(inocula,
-                                                               num_reps=num_reps)
-    ys_SBP_poisson, ys_sbp_p_cis = TSD_vs_inoculum_size_SBP_poisson(inocula,
-                                                               num_reps=num_reps)
-
-
-
+    ys_stage_structured, ys_ss_cis = (
+        TSD_vs_inoculum_size_stage_structured(inocula, mu=mu, num_reps=num_reps))
+    ys_stage_structured_poisson, ys_ss_p_cis = (
+        TSD_vs_inoculum_size_stage_structured_poisson(inocula, mu=mu, num_reps=num_reps))
+    ys_SBP_poisson, ys_sbp_p_cis = (
+        TSD_vs_inoculum_size_SBP_poisson(inocula, mu=mu, num_reps=num_reps))
 
     fig, ax = plt.subplots(figsize=(4.8, 4.8))
-    #ax.plot(inocula, ys_SBP_num_int, '.', color='k', label='SBP', zorder=5)
-    #ax.plot(inocula, ys_SBP_theory_lim, '-', color='orange', label='SBP')
-    #ax.plot(inocula, ys_SBP_theory_exact, '-', color='red', zorder=0, label=r'simple birth process [Eq.~(11a)]')
-    ax.plot(inocula, ys_SBP_theory_exact, '-', color='red', zorder=10, label=r'simple birth process')
-    #ax.plot(inocula, ys_SBP_simulation, marker='s', lw=0, ms=8, color='red',
-    #        label=r'simple birth process (simulations)')
-    print()
-    print('BBB')
-    print(ys_stage_structured)
-    print(ys_ss_cis)
-    print()
-    ax.errorbar(inocula, ys_stage_structured, yerr=ys_ss_cis, fmt='*', ms=18, color='#E3CF57',
-            zorder=12)
 
-    ax.plot(inocula, ys_stage_structured, '-', lw=1, color='#E3CF57', zorder=0)
-    ax.plot(poisson_inocula, ys_poisson_det, '.', color='blue', ms=21)
-            #label='Poisson inocula, deterministic [Eq.~(15)]')
+    # red line
+    ax.plot(inocula, ys_SBP_theory_exact, '-', color='red', zorder=10, label=r'simple birth process')
+    # gold stars
+    ax.errorbar(inocula, ys_stage_structured, yerr=ys_ss_cis, marker='*', lw=1, ms=18, color='#E3CF57',
+            zorder=12)
+    # blue circles
+    ax.plot(poisson_inocula, ys_poisson_det, '.-', lw=1, color='blue', ms=21)
+    # green triangles
+    ax.errorbar(poisson_inocula, ys_stage_structured_poisson, yerr=ys_ss_p_cis,
+                marker='^', lw=1, ms=12, color='darkgreen')
+    # purple diamonds
     ax.errorbar(poisson_inocula, ys_SBP_poisson, yerr=ys_sbp_p_cis, marker='D',
                 lw=1, ms=10, color='purple')
-    ax.errorbar(poisson_inocula, ys_stage_structured_poisson,
-                yerr=ys_ss_p_cis, marker='^', lw=1,
-                ms=12, color='darkgreen')
-    print(poisson_inocula)
-    print(ys_stage_structured_poisson)
-    print(ys_ss_p_cis)
-    #ax.plot(poisson_inocula, ys_stage_structured_poisson, ls='-', lw=1,
-    #        color='darkgreen', zorder=0)
-    ax.plot(poisson_inocula, ys_SBP_poisson, lw=0, color='purple')
-    ax.plot(poisson_inocula, ys_poisson_det, lw=1, color='blue', zorder=0)
 
+    # phantom plots for the figure legend:
     ax.plot([0.01], [0.05], marker='.', ms=15, lw=0, color='blue',
             label='Poisson inocula, deterministic')
     ax.plot([0.01], [0.05], marker='*', ms=13, lw=0, color='#E3CF57',
@@ -1291,16 +1281,20 @@ def generate_fig_2():
     ax.plot([0.01], [0.05], marker='^', ms=9, lw=0, color='darkgreen',
             label='Poisson inocula, age structured')
 
-    ax.text(12, 0.066, r'$\sigma_t \sim n_0^{-1/2}$', color='k', fontsize=12)
+    # -1/2 power-law scaling
     ax.plot([15, 28], [0.10, 0.10*(28/15)**(-0.5)], color='k', lw=2)
+    ax.text(12, 0.066, r'$\sigma_t \sim n_0^{-1/2}$', color='k', fontsize=12)
+
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.axis([1, 30, 0.03, 1.1])
     ax.set_xlabel('mean inoculum size $n_0$')
     ax.set_ylabel('temporal standard deviation $\sigma_t$ [hr]')
-    lgnd = plt.legend(fontsize=8, loc='upper right')
+    plt.legend(fontsize=8, loc='upper right')
+
     plt.savefig('figs/Fig2.pdf', bbox_inches='tight')
 
+    return
 
 def generate_fig_3():
     """Generates Figure 2 of the main text. Plots
