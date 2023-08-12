@@ -3,7 +3,8 @@ exponentially growing populations" by Eric Jones, Joshua Derrick, Roger Nisbet,
 Will Ludington, and David Sivak.
 
 Raw data from more than 1300 bacterial growth experiments in E. coli and S.
-aureus are provided in the .xlsx files:
+aureus are provided in the .xlsx files. Each file corresponds to data from one
+96-well plate, corresponding to two inoculum sizes of >40 replicates each.
 * ecoli_growth_rep_* files give optical density measurements over time
 * spot_plate_counting_* files give spot plate counts, used to measure inoculum
   size
