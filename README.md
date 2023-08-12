@@ -5,9 +5,9 @@ Will Ludington, and David Sivak.
 Raw data from more than 1300 bacterial growth experiments in E. coli and S.
 aureus are provided in the .xlsx files:
 * ecoli_growth_rep_* files give optical density measurements over time
-* spot_plate_counting* files give spot plate counts, used to measure inoculum
+* spot_plate_counting_* files give spot plate counts, used to measure inoculum
   size
-* well_inoculations_rep* files specify inoculum sizes for each well of the
+* well_inoculations_rep_* files specify inoculum sizes for each well of the
   96-well plate
 
 To make Figures 1, 2, 3, 4, and 5 of the main text, run the python program
